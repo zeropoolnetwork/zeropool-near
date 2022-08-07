@@ -1,0 +1,33 @@
+[package]
+name = "greeter"
+version = "1.0.0"
+authors = ["Near Inc <hello@near.org>"]
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+borsh = "0.9.3"
+near-sdk = { path = "../../near-sdk-rs/near-sdk", features = ["unstable"] }
+num-derive = "0.3.3"
+num-traits = "0.2.15"
+ff-uint = { version = "0.2.4", default-features = false }
+
+[profile.release]
+codegen-units = 1
+opt-level = "z"
+lto = true
+debug = false
+panic = "abort"
+overflow-checks = true
+
+[workspace]
+members = []
+
+[dev-dependencies]
+hex-literal = "0.3.4"
+
+[features]
+default = ["borsh_support"]
+borsh_support = ["ff-uint/borsh_support"]
