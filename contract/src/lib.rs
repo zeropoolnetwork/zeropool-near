@@ -207,22 +207,14 @@ impl Contract {
                 //     ExistenceRequirement::AllowDeath,
                 // )?;
             },
-
-            // if fee > U256::ZERO {
-            //     log::debug!("    Processing fee");
-            //     let encoded_fee = (fee.unchecked_mul(DENOMINATOR).overflowing_neg().0).encode();
-            //     let native_fee = <BalanceOf<T>>::decode(&mut &encoded_fee[..])
-            //         .map_err(|_err| Into::<DispatchError>::into(Error::<T>::Deserialization))?;
-
-            //     T::Currency::transfer(
-            //         &Self::account_id(),
-            //         &operator,
-            //         native_fee,
-            //         ExistenceRequirement::AllowDeath,
-            //     )?;
-            // }
         }
 
+        if fee > U256::ZERO {
+            let fee = (fee.unchecked_mul(self.denominator).overflowing_neg().0).try_into().unwrap();
+
+            // FIXME
+            Promise::new(self.operator).transfer(fee);
+        }
 
         // Change contract state
         self.pool_index = pool_index;
