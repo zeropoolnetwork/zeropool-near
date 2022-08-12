@@ -1,17 +1,24 @@
 use borsh::{BorshDeserialize, BorshSerialize};
+use near_contract_standards::fungible_token::FungibleToken;
+use near_contract_standards::fungible_token::core::FungibleTokenCore;
+use near_contract_standards::fungible_token::metadata::FungibleTokenMetadata;
 use near_sdk::collections::{LookupMap, TreeMap};
+use near_sdk::json_types::U128;
+use near_sdk::{PromiseOrValue, ext_contract, Gas};
+use near_sdk::store::Lazy;
 use near_sdk::{env, json_types::Base64VecU8, near_bindgen, AccountId, Promise};
+use near_sdk::collections::LazyOption;
+
 
 use crate::num::*;
 use crate::tx_decoder::{TxDecoder, TxType};
-use crate::verifier::{
-    alt_bn128_g1_multiexp, alt_bn128_g1_neg, alt_bn128_groth16verify, alt_bn128_pairing_check, Fq,
-    Fq2, Fr, Proof, G1, G2, VK,
-};
+use crate::verifier::{alt_bn128_groth16verify, VK};
 
 mod num;
 mod tx_decoder;
 mod verifier;
+
+const GAS_FOR_FT_TRANSFER: Gas = 15_000_000_000_000;
 
 // #[global_allocator]
 // static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
@@ -23,12 +30,16 @@ const R: U256 = U256::from_const_str(
     "21888242871839275222246405745257275088548364400416034343698204186575808495617",
 );
 
+#[ext_contract(ext_ft_contract)]
+trait FungibleTokenCore {
+    fn ft_transfer(&mut self, receiver_id: AccountId, amount: U128, memo: Option<String>);
+}
+
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize)]
-pub struct Contract {
-    pub owner: AccountId,
+pub struct MainPool {
     // TODO: Configurable operator
-    pub operator: AccountId,
+    pub operator: Option<AccountId>,
     pub tree_vk: Option<VK>,
     pub tx_vk: Option<VK>,
     pub pool_index: U256,
@@ -36,52 +47,86 @@ pub struct Contract {
     pub nullifiers: TreeMap<U256, U256>,
     pub all_messages_hash: U256,
     pub denominator: U256,
+    pub token_id: AccountId,
 }
 
-impl Default for Contract {
+impl Default for MainPool {
     fn default() -> Self {
         Self {
-            owner: env::signer_account_id(),
-            operator: env::signer_account_id(),
+            operator: None,
             tree_vk: None,
             tx_vk: None,
             pool_index: U256::ZERO,
             roots: TreeMap::new(b"r"),
-            nullifiers: TreeMap::new(b"r"),
+            nullifiers: TreeMap::new(b"n"),
             all_messages_hash: U256::ZERO,
-            denominator: U256::from(1000),
+            denominator: U256::from(1),
+            token: FungibleToken::new(b"a"),
+        }
+    }
+}
+
+impl MainPool {
+    fn check_operator(&self) {
+        if let Some(op) = self.operator {
+            if env::signer_account_id() != op {
+                panic!("Only operator can call this function");
+            }
+        } else {
+            env::panic_str("No operator set");
+        }
+    }
+
+    fn check_owner(&self) {
+        if env::signer_account_id() != env::current_account_id() {
+            panic!("Only owner can call this function");
         }
     }
 }
 
 #[near_bindgen]
-impl Contract {
+impl MainPool {
+    #[init]
+    pub fn new(
+        token_id: AccountId,
+    ) -> Self {
+        assert!(!env::state_exists(), "Already initialized");
+
+        let mut this = Self {
+            token_id,
+            ..Default::default()
+        };
+        this
+    }
+
     pub fn set_tx_vk(&mut self, vk: Base64VecU8) {
+        self.check_owner();
+
         let vk = VK::deserialize(&mut &Vec::<u8>::from(vk)[..])
             .unwrap_or_else(|_| env::panic_str("Cannot deserialize vk."));
         self.tx_vk = Some(vk);
     }
 
     pub fn set_tree_vk(&mut self, vk: Base64VecU8) {
+        self.check_owner();
+
         let vk = VK::deserialize(&mut &Vec::<u8>::from(vk)[..])
             .unwrap_or_else(|_| env::panic_str("Cannot deserialize vk."));
         self.tree_vk = Some(vk);
     }
 
-    pub fn set_owner(&mut self, owner: AccountId) {
-        let account_id = env::signer_account_id();
-        if account_id != owner {
-            env::panic_str("Only owner can set owner.");
-        }
+    pub fn set_operator(&mut self, operator: AccountId) {
+        self.check_owner();
 
-        self.owner = owner;
+        self.operator = Some(operator);
     }
 
+    #[payable]
     pub fn transact(&mut self, tx: Base64VecU8) {
-        let account_id = env::signer_account_id();
-        if account_id != self.operator {
-            env::panic_str("Only operator can transact.");
-        }
+        self.check_operator();
+
+        let operator_id = env::signer_account_id();
+        let owner_id = env::current_account_id();
 
         let tx_vk = self.tx_vk.clone().expect("tx_vk is not set.");
         let tree_vk = self.tree_vk.clone().expect("tree_vk is not set.");
@@ -97,8 +142,13 @@ impl Contract {
         const DELTA_SIZE: u32 = 256;
         let delta = tx.delta().unchecked_add(POOL_ID.unchecked_shr(DELTA_SIZE));
 
-        let transact_inputs =
-            [root_before, tx.nullifier().into(), tx.out_commit(), delta, message_hash_num];
+        let transact_inputs = [
+            root_before,
+            tx.nullifier().into(),
+            tx.out_commit(),
+            delta,
+            message_hash_num,
+        ];
 
         if !alt_bn128_groth16verify(tx_vk, tx.transact_proof(), &transact_inputs) {
             env::panic_str("Transaction proof is invalid.");
@@ -121,7 +171,8 @@ impl Contract {
         // Set the nullifier
         // TODO: LE or BE?
         let mut elements = [0u8; core::mem::size_of::<U256>() * 2];
-        elements[..core::mem::size_of::<U256>()].copy_from_slice(&tx.out_commit().to_little_endian());
+        elements[..core::mem::size_of::<U256>()]
+            .copy_from_slice(&tx.out_commit().to_little_endian());
         elements[core::mem::size_of::<U256>()..].copy_from_slice(&tx.delta().to_little_endian());
         let hash = U256::from_little_endian(&env::keccak256_array(&elements));
 
@@ -129,7 +180,8 @@ impl Contract {
 
         // Calculate all_messages_hash
         let mut hashes = [0u8; core::mem::size_of::<U256>() * 2];
-        hashes[..core::mem::size_of::<U256>()].copy_from_slice(&self.all_messages_hash.to_little_endian());
+        hashes[..core::mem::size_of::<U256>()]
+            .copy_from_slice(&self.all_messages_hash.to_little_endian());
         hashes[core::mem::size_of::<U256>()..].copy_from_slice(&message_hash);
         let new_all_messages_hash = U256::from_little_endian(&env::keccak256_array(&hashes));
 
@@ -142,56 +194,36 @@ impl Contract {
                 if token_amount != U256::ZERO || energy_amount != U256::ZERO {
                     env::panic_str("Transfer tx must have zero token and energy amount.");
                 }
-            },
+            }
             TxType::Deposit => {
-                if token_amount > U256::MAX.unchecked_div(U256::from(2u32)) ||
-                    energy_amount != U256::ZERO
+                if token_amount > U256::MAX.unchecked_div(U256::from(2u32))
+                    || energy_amount != U256::ZERO
                 {
                     env::panic_str("Token amount must be negative and energy_amount must be zero.");
                 }
 
-                let deposit_spender = env::ecrecover(hash, signature, v, malleability_flag);
+                let deposit_spender = if let Some(deposit_spender) = env::ecrecover(hash, signature, v, malleability_flag) {
+                    deposit_spender
+                } else {
+                    env::panic_str("Invalid deposit signature.");
+                };
 
-                // let src = T::AccountId::decode(&mut tx.deposit_address())
-                //     .map_err(|_err| Into::<DispatchError>::into(Error::<T>::Deserialization))?;
+                let amount = token_amount
+                    .unchecked_mul(self.denominator)
+                    .try_into()
+                    .unwrap();
 
-                // let sig_result =
-                //     match sp_core::sr25519::Signature::try_from(tx.deposit_signature()) {
-                //         Ok(signature) => {
-                //             let signer =
-                //                 sp_core::sr25519::Public::from_slice(tx.deposit_address())
-                //                     .map_err(|_err| {
-                //                         Into::<DispatchError>::into(
-                //                             Error::<T>::InvalidDepositAddress,
-                //                         )
-                //                     })?;
-                //             signature.verify(tx.nullifier_bytes(), &signer)
-                //         },
-                //         _ => false,
-                //     };
 
-                // if !sig_result {
-                //     env::panic_str("Invalid deposit signature.");
-                // }
-                let amount = token_amount.unchecked_mul(self.denominator).try_into().unwrap();
-
-                // TODO: Use separate pull
-                Promise::new(account_id).transfer(amount);
-
-                // T::Currency::transfer(
-                //     &src,
-                //     &Self::account_id(),
-                //     native_amount,
-                //     ExistenceRequirement::AllowDeath,
-                // )?;
-            },
+                ext_ft_contract::ft_transfer(
+                    buyer_id.clone(),
+                    native_amount,
+                    None,
+                    &price.contract_id,
+                    1,
+                    GAS_FOR_FT_TRANSFER
+                );
+            }
             TxType::Withdraw => {
-                // if token_amount < U256::MAX.unchecked_div(U256::from(2u32)) ||
-                //     energy_amount < U256::MAX.unchecked_div(U256::from(2u32))
-                // {
-                //     return Err(Error::<T>::IncorrectAmount.into())
-                // }
-
                 // let dest = T::AccountId::decode(&mut tx.memo_address())
                 //     .map_err(|_err| Into::<DispatchError>::into(Error::<T>::Deserialization))?;
 
@@ -206,14 +238,15 @@ impl Contract {
                 //     native_amount,
                 //     ExistenceRequirement::AllowDeath,
                 // )?;
-            },
+            }
         }
 
         if fee > U256::ZERO {
-            let fee = (fee.unchecked_mul(self.denominator).overflowing_neg().0).try_into().unwrap();
+            // let fee = (fee.unchecked_mul(self.denominator).overflowing_neg().0)
+            //     .try_into()
+            //     .unwrap();
 
-            // FIXME
-            Promise::new(self.operator).transfer(fee);
+            // FIXME: Transfer fee
         }
 
         // Change contract state
@@ -223,7 +256,13 @@ impl Contract {
         self.all_messages_hash = new_all_messages_hash;
     }
 
-    pub fn transfer(&self, account_id: AccountId, amount: u128) {
-        Promise::new(account_id).transfer(amount);
+    fn ft_on_transfer(
+        &mut self,
+        sender_id: AccountId,
+        amount: U128,
+        msg: String,
+    ) -> PromiseOrValue<U128> {
+        PromiseOrValue::Value(amount)
     }
 }
+
