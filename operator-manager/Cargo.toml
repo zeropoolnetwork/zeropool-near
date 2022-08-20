@@ -1,7 +1,7 @@
 [package]
-name = "greeter"
+name = "zeropool-near-operator-manager"
 version = "1.0.0"
-authors = ["Near Inc <hello@near.org>"]
+authors = ["Dmitry Vdovin <voidxnull@gmail.com>"]
 edition = "2021"
 
 [lib]
@@ -18,9 +18,6 @@ lto = true
 debug = false
 panic = "abort"
 overflow-checks = true
-
-[workspace]
-members = []
 
 [dev-dependencies]
 hex-literal = "0.3.4"

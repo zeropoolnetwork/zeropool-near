@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "pool",
+    "relayer-pool",
+    "operator-manager",
+]

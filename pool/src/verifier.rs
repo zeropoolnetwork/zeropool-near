@@ -33,7 +33,7 @@ pub fn alt_bn128_pairing_check(v: Vec<(G1, G2)>) -> bool {
     env::alt_bn128_pairing_check(&data)
 }
 
-#[derive(BorshDeserialize, BorshSerialize, Clone, Debug)]
+#[derive(BorshDeserialize, BorshSerialize, Clone, Debug, Default)]
 pub struct VK {
     pub alpha_g1: G1,
     pub beta_g2: G2,
