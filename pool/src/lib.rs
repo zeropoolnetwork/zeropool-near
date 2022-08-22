@@ -1,5 +1,4 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use near_contract_standards::fungible_token::core::{FungibleTokenCore};
 use near_sdk::collections::{TreeMap};
 use near_sdk::json_types::U128;
 use near_sdk::{PromiseOrValue, ext_contract, Gas, require};
@@ -16,8 +15,11 @@ mod verifier;
 
 const GAS_FOR_FT_TRANSFER: Gas = Gas(15_000_000_000_000);
 
-// #[global_allocator]
-// static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
+
+#[ext_contract(ext_op_manager)]
+trait OperatorManager {
+    fn operator(&self) -> AccountId;
+}
 
 pub const FIRST_ROOT: U256 = U256::from_const_str(
     "11469701942666298368112882412133877458305516134926649826543144744382391691533",
@@ -59,7 +61,8 @@ impl Default for MainPool {
 
 impl MainPool {
     fn check_operator(&self) {
-        if let Some(op) = self.operator {
+        let operator = ext_op_manager::operator();
+        if let Some(op) = operator {
             if env::signer_account_id() != op {
                 panic!("Only operator can call this function");
             }
@@ -198,13 +201,14 @@ impl MainPool {
         self.all_messages_hash = new_all_messages_hash;
     }
 
-    fn ft_on_transfer(
-        &mut self,
-        sender_id: AccountId,
-        amount: U128,
-        msg: String,
-    ) -> PromiseOrValue<U128> {
-        PromiseOrValue::Value(amount)
-    }
+    // TODO: Multi-token support
+    // fn ft_on_transfer(
+    //     &mut self,
+    //     sender_id: AccountId,
+    //     amount: U128,
+    //     msg: String,
+    // ) -> PromiseOrValue<U128> {
+    //     PromiseOrValue::Value(amount)
+    // }
 }
 
