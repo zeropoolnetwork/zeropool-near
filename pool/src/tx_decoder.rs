@@ -36,7 +36,7 @@ pub struct Tx {
 }
 
 #[derive(Debug, PartialEq, BorshDeserialize)]
-struct Memo(Vec<u8>);
+pub struct Memo(Vec<u8>);
 
 impl Memo {
     #[inline]

@@ -2,6 +2,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use near_sdk::require;
 use near_sdk::{env, near_bindgen, AccountId};
 
+/// Minimal operator implementation
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize)]
 pub struct RelayerPool {
@@ -23,8 +24,8 @@ impl RelayerPool {
         RelayerPool { operator: env::current_account_id() }
     }
 
+    #[private]
     pub fn set_operator(&mut self, operator: AccountId) {
-        require!(env::current_account_id() == env::signer_account_id(), "Only owner can change the operator");
         self.operator = operator;
     }
 

@@ -16,10 +16,10 @@ mod verifier;
 const GAS_FOR_FT_TRANSFER: Gas = Gas(15_000_000_000_000);
 
 
-#[ext_contract(ext_op_manager)]
-trait OperatorManager {
-    fn operator(&self) -> AccountId;
-}
+// #[ext_contract(ext_op_manager)]
+// trait OperatorManager {
+//     fn operator(&self) -> AccountId;
+// }
 
 pub const FIRST_ROOT: U256 = U256::from_const_str(
     "11469701942666298368112882412133877458305516134926649826543144744382391691533",
@@ -32,7 +32,8 @@ const R: U256 = U256::from_const_str(
 #[derive(BorshDeserialize, BorshSerialize)]
 pub struct MainPool {
     // TODO: Configurable operator
-    pub operator_manager: AccountId,
+    // pub operator_manager: AccountId,
+    pub operator: Option<AccountId>,
     pub tree_vk: VK,
     pub tx_vk: VK,
     pub pool_index: U256,
@@ -46,7 +47,7 @@ pub struct MainPool {
 impl Default for MainPool {
     fn default() -> Self {
         Self {
-            operator_manager: env::current_account_id(),
+            operator: None,
             tree_vk: Default::default(),
             tx_vk: Default::default(),
             pool_index: U256::ZERO,
@@ -61,7 +62,7 @@ impl Default for MainPool {
 
 impl MainPool {
     fn check_operator(&self) {
-        let operator = ext_op_manager::operator();
+        let operator = self.operator.clone();
         if let Some(op) = operator {
             if env::signer_account_id() != op {
                 panic!("Only operator can call this function");
@@ -69,10 +70,6 @@ impl MainPool {
         } else {
             env::panic_str("No operator set");
         }
-    }
-
-    fn check_owner(&self) {
-        require!(env::signer_account_id() == env::current_account_id(), "Only owner can call this function");
     }
 }
 
@@ -90,12 +87,11 @@ impl MainPool {
         let tree_vk = VK::deserialize(&mut &Vec::<u8>::from(tree_vk)[..])
             .unwrap_or_else(|_| env::panic_str("Cannot deserialize vk."));
 
-        let mut this = Self {
+        Self {
             tx_vk,
             tree_vk,
             ..Default::default()
-        };
-        this
+        }
     }
 
     #[payable]
@@ -124,7 +120,7 @@ impl MainPool {
             message_hash_num,
         ];
 
-        if !alt_bn128_groth16verify(self.tx_vk, tx.transact_proof, &transact_inputs) {
+        if !alt_bn128_groth16verify(self.tx_vk.clone(), tx.transact_proof, &transact_inputs) {
             env::panic_str("Transaction proof is invalid.");
         }
 
@@ -138,7 +134,7 @@ impl MainPool {
 
         // Verify tree proof
         let tree_inputs = [root_before, tx.root_after, tx.out_commit];
-        if !alt_bn128_groth16verify(self.tree_vk, tx.tree_proof, &tree_inputs) {
+        if !alt_bn128_groth16verify(self.tree_vk.clone(), tx.tree_proof, &tree_inputs) {
             env::panic_str("Tree proof is invalid.");
         }
 
