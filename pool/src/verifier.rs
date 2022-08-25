@@ -5,7 +5,6 @@ use crate::num::*;
 
 pub type Fr = U256;
 pub type Fq = U256;
-pub type Fq2 = [Fq; 2];
 pub type G1 = [Fq; 2];
 pub type G2 = [Fq; 4];
 

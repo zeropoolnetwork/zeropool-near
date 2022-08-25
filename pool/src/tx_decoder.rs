@@ -1,6 +1,6 @@
 use crate::{num::*, verifier::Proof};
 use borsh::BorshDeserialize;
-use near_sdk::{AccountId, env};
+use near_sdk::{env, AccountId};
 
 // Sizes
 const NUM_SIZE: usize = 32;
@@ -72,4 +72,3 @@ impl Memo {
         env::keccak256_array(&self.0)
     }
 }
-

@@ -1,72 +1,70 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use near_sdk::collections::{TreeMap};
-use near_sdk::json_types::U128;
-use near_sdk::{PromiseOrValue, ext_contract, Gas, require};
+use near_sdk::collections::{LookupMap, TreeMap};
 use near_sdk::{env, json_types::Base64VecU8, near_bindgen, AccountId, Promise};
-
+use near_sdk::{ext_contract, require, Gas, PromiseOrValue};
+use temp_deposits::Deposits;
 
 use crate::num::*;
-use crate::tx_decoder::{TxType, Tx};
+use crate::tx_decoder::{Tx, TxType};
 use crate::verifier::{alt_bn128_groth16verify, VK};
 
 mod num;
 mod tx_decoder;
 mod verifier;
+mod temp_deposits;
 
-const GAS_FOR_FT_TRANSFER: Gas = Gas(15_000_000_000_000);
-
-
-// #[ext_contract(ext_op_manager)]
-// trait OperatorManager {
-//     fn operator(&self) -> AccountId;
-// }
-
-pub const FIRST_ROOT: U256 = U256::from_const_str(
+const FIRST_ROOT: U256 = U256::from_const_str(
     "11469701942666298368112882412133877458305516134926649826543144744382391691533",
 );
 const R: U256 = U256::from_const_str(
     "21888242871839275222246405745257275088548364400416034343698204186575808495617",
 );
 
+
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize)]
 pub struct MainPool {
-    // TODO: Configurable operator
-    // pub operator_manager: AccountId,
-    pub operator: Option<AccountId>,
-    pub tree_vk: VK,
-    pub tx_vk: VK,
-    pub pool_index: U256,
-    pub roots: TreeMap<U256, U256>,
-    pub nullifiers: TreeMap<U256, U256>,
-    pub all_messages_hash: U256,
-    pub denominator: U256,
-    // pub token_id: AccountId,
+    operator: Option<AccountId>,
+    tree_vk: VK,
+    tx_vk: VK,
+    pool_index: U256,
+    roots: TreeMap<U256, U256>,
+    nullifiers: TreeMap<U256, U256>,
+    all_messages_hash: U256,
+    denominator: U256,
+    /// Temporary deposits: imitation of EVM's allowance system
+    // TODO: Allow multiple deposits per user
+    deposits: Deposits,
 }
 
 impl Default for MainPool {
     fn default() -> Self {
+        let mut roots = TreeMap::new(b"r");
+        roots.insert(&U256::ZERO, &FIRST_ROOT);
+
         Self {
             operator: None,
             tree_vk: Default::default(),
             tx_vk: Default::default(),
             pool_index: U256::ZERO,
-            roots: TreeMap::new(b"r"),
+            roots,
             nullifiers: TreeMap::new(b"n"),
             all_messages_hash: U256::ZERO,
             denominator: U256::from(1),
-            // token_id: AccountId::new_unchecked("invalid".to_owned()),
+            deposits: Deposits::new(b"d"),
         }
     }
 }
 
 impl MainPool {
-    fn check_operator(&self) {
+    fn check_operator(&self) -> AccountId {
         let operator = self.operator.clone();
         if let Some(op) = operator {
             if env::signer_account_id() != op {
                 panic!("Only operator can call this function");
             }
+
+            op
         } else {
             env::panic_str("No operator set");
         }
@@ -76,10 +74,7 @@ impl MainPool {
 #[near_bindgen]
 impl MainPool {
     #[init]
-    pub fn new(
-        tx_vk: Base64VecU8,
-        tree_vk: Base64VecU8,
-    ) -> Self {
+    pub fn new(tx_vk: Base64VecU8, tree_vk: Base64VecU8) -> Self {
         assert!(!env::state_exists(), "Already initialized");
 
         let tx_vk = VK::deserialize(&mut &Vec::<u8>::from(tx_vk)[..])
@@ -94,13 +89,24 @@ impl MainPool {
         }
     }
 
+    #[private]
+    pub fn set_operator(&mut self, operator: AccountId) {
+        self.operator = Some(operator);
+    }
+
+    /// Deposit native
+    #[payable]
+    pub fn lock(&mut self) {
+        self.deposits.lock();
+    }
+
+    pub fn release(&mut self) -> Promise {
+        self.deposits.release()
+    }
+
     #[payable]
     pub fn transact(&mut self, encoded_tx: Base64VecU8) {
-        self.check_operator();
-
-        let operator_id = env::signer_account_id();
-        let owner_id = env::current_account_id();
-
+        let operator_id = self.check_operator();
         let tx: Tx = Tx::try_from_slice(&encoded_tx.0).expect("invalid transaction format");
         let message_hash = tx.memo.hash();
         let message_hash_num = U256::from_little_endian(&message_hash).unchecked_rem(R);
@@ -141,8 +147,7 @@ impl MainPool {
         // Set the nullifier
         // TODO: LE or BE?
         let mut elements = [0u8; core::mem::size_of::<U256>() * 2];
-        elements[..core::mem::size_of::<U256>()]
-            .copy_from_slice(&tx.out_commit.to_little_endian());
+        elements[..core::mem::size_of::<U256>()].copy_from_slice(&tx.out_commit.to_little_endian());
         elements[core::mem::size_of::<U256>()..].copy_from_slice(&tx.delta.to_little_endian());
         let hash = U256::from_little_endian(&env::keccak256_array(&elements));
 
@@ -160,23 +165,29 @@ impl MainPool {
         let energy_amount = tx.energy_amount;
 
         match tx.tx_type {
-            TxType::Transfer => {
-                if token_amount != U256::ZERO || energy_amount != U256::ZERO {
-                    env::panic_str("Transfer tx must have zero token and energy amount.");
-                }
-            }
             TxType::Deposit => {
                 if token_amount > U256::MAX.unchecked_div(U256::from(2u32))
                     || energy_amount != U256::ZERO
                 {
                     env::panic_str("Token amount must be negative and energy_amount must be zero.");
                 }
+
+                self.deposits.spend(&tx.deposit_address);
+            }
+            TxType::Transfer => {
+                if token_amount != U256::ZERO || energy_amount != U256::ZERO {
+                    env::panic_str("Transfer tx must have zero token and energy amount.");
+                }
             }
             TxType::Withdraw => {
                 let dest = tx.memo.address();
 
-                let withdraw_amount =
-                    (token_amount.overflowing_neg().0.unchecked_mul(self.denominator)).try_into().unwrap();
+                let withdraw_amount = (token_amount
+                    .overflowing_neg()
+                    .0
+                    .unchecked_mul(self.denominator))
+                .try_into()
+                .unwrap();
 
                 Promise::new(dest).transfer(withdraw_amount);
             }
@@ -207,4 +218,3 @@ impl MainPool {
     //     PromiseOrValue::Value(amount)
     // }
 }
-
