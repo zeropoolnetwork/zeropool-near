@@ -2,14 +2,7 @@ use crate::{num::*, verifier::Proof};
 use borsh::BorshDeserialize;
 use near_sdk::{env, AccountId};
 
-// Sizes
-const NUM_SIZE: usize = 32;
-const PROOF_SIZE: usize = NUM_SIZE * 8;
-const DELTA_SIZE: usize = 28;
 const BALANCE_SIZE: usize = 8;
-const ADDRESS_SIZE: usize = 32;
-const SIGNATURE_SIZE: usize = 64;
-const MEMO_META_SIZE: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshDeserialize)]
 #[repr(u16)]
@@ -45,7 +38,7 @@ impl Memo {
     }
 
     #[inline]
-    pub fn native_amount(&self) -> U256 {
+    pub fn _native_amount(&self) -> U256 {
         const OFFSET: usize = BALANCE_SIZE;
         U256::from_big_endian(&self.0[OFFSET..(OFFSET + BALANCE_SIZE)])
     }
@@ -54,17 +47,6 @@ impl Memo {
     pub fn address(&self) -> AccountId {
         const OFFSET: usize = BALANCE_SIZE * 2;
         AccountId::try_from_slice(&self.0[OFFSET..]).expect("invalid address")
-    }
-
-    #[inline]
-    pub fn ciphertext(&self, tx_type: TxType) -> &[u8] {
-        let offset = if tx_type == TxType::Withdraw {
-            BALANCE_SIZE * 2 + ADDRESS_SIZE
-        } else {
-            BALANCE_SIZE
-        };
-
-        &self.0[offset..]
     }
 
     #[inline]

@@ -1,8 +1,8 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use core::str::FromStr;
-use near_sdk::collections::{LookupMap, TreeMap};
+use near_sdk::collections::TreeMap;
 use near_sdk::{env, json_types::Base64VecU8, near_bindgen, AccountId, Promise};
-use near_sdk::{ext_contract, require, Gas, PanicOnDefault, PromiseOrValue};
+use near_sdk::{PanicOnDefault, PromiseOrValue};
 
 use crate::num::*;
 use crate::reserves::Reserves;
@@ -102,7 +102,7 @@ impl MainPool {
         self.roots.get(&index).unwrap().to_string()
     }
 
-    pub fn transact(&mut self, encoded_tx: Base64VecU8) {
+    pub fn transact(&mut self, encoded_tx: Base64VecU8) -> PromiseOrValue<()> {
         let operator_id = self.check_operator();
         let tx: Tx = Tx::try_from_slice(&encoded_tx.0).expect("invalid transaction format");
         let message_hash = tx.memo.hash();
@@ -161,6 +161,8 @@ impl MainPool {
         let token_amount = tx.token_amount.overflowing_add(fee).0;
         let energy_amount = tx.energy_amount;
 
+        let mut res = PromiseOrValue::Value(());
+
         match tx.tx_type {
             TxType::Deposit => {
                 if token_amount > U256::MAX.unchecked_div(U256::from(2u32))
@@ -186,7 +188,7 @@ impl MainPool {
                 .try_into()
                 .unwrap();
 
-                Promise::new(dest).transfer(withdraw_amount);
+                res = PromiseOrValue::Promise(Promise::new(dest).transfer(withdraw_amount));
             }
         }
 
@@ -195,7 +197,7 @@ impl MainPool {
                 .try_into()
                 .unwrap();
 
-            Promise::new(operator_id).transfer(fee);
+            res = PromiseOrValue::Promise(Promise::new(operator_id).transfer(fee));
         }
 
         // Change contract state
@@ -203,6 +205,8 @@ impl MainPool {
         self.roots.insert(&pool_index, &tx.root_after);
         self.nullifiers.insert(&tx.nullifier, &hash);
         self.all_messages_hash = new_all_messages_hash;
+
+        res
     }
 
     // TODO: Multi-token support
