@@ -1,17 +1,18 @@
 use borsh::{BorshDeserialize, BorshSerialize};
+use core::str::FromStr;
 use near_sdk::collections::{LookupMap, TreeMap};
 use near_sdk::{env, json_types::Base64VecU8, near_bindgen, AccountId, Promise};
-use near_sdk::{ext_contract, require, Gas, PromiseOrValue};
-use temp_deposits::Deposits;
+use near_sdk::{ext_contract, require, Gas, PanicOnDefault, PromiseOrValue};
 
 use crate::num::*;
+use crate::reserves::Reserves;
 use crate::tx_decoder::{Tx, TxType};
 use crate::verifier::{alt_bn128_groth16verify, VK};
 
 mod num;
+mod reserves;
 mod tx_decoder;
 mod verifier;
-mod temp_deposits;
 
 const FIRST_ROOT: U256 = U256::from_const_str(
     "11469701942666298368112882412133877458305516134926649826543144744382391691533",
@@ -20,9 +21,8 @@ const R: U256 = U256::from_const_str(
     "21888242871839275222246405745257275088548364400416034343698204186575808495617",
 );
 
-
 #[near_bindgen]
-#[derive(BorshDeserialize, BorshSerialize)]
+#[derive(PanicOnDefault, BorshDeserialize, BorshSerialize)]
 pub struct MainPool {
     operator: Option<AccountId>,
     tree_vk: VK,
@@ -34,26 +34,7 @@ pub struct MainPool {
     denominator: U256,
     /// Temporary deposits: imitation of EVM's allowance system
     // TODO: Allow multiple deposits per user
-    deposits: Deposits,
-}
-
-impl Default for MainPool {
-    fn default() -> Self {
-        let mut roots = TreeMap::new(b"r");
-        roots.insert(&U256::ZERO, &FIRST_ROOT);
-
-        Self {
-            operator: None,
-            tree_vk: Default::default(),
-            tx_vk: Default::default(),
-            pool_index: U256::ZERO,
-            roots,
-            nullifiers: TreeMap::new(b"n"),
-            all_messages_hash: U256::ZERO,
-            denominator: U256::from(1),
-            deposits: Deposits::new(b"d"),
-        }
-    }
+    reserves: Reserves,
 }
 
 impl MainPool {
@@ -77,6 +58,9 @@ impl MainPool {
     pub fn new(tx_vk: Base64VecU8, tree_vk: Base64VecU8) -> Self {
         assert!(!env::state_exists(), "Already initialized");
 
+        let mut roots = TreeMap::new(b"r");
+        roots.insert(&U256::ZERO, &FIRST_ROOT);
+
         let tx_vk = VK::deserialize(&mut &Vec::<u8>::from(tx_vk)[..])
             .unwrap_or_else(|_| env::panic_str("Cannot deserialize vk."));
         let tree_vk = VK::deserialize(&mut &Vec::<u8>::from(tree_vk)[..])
@@ -85,7 +69,13 @@ impl MainPool {
         Self {
             tx_vk,
             tree_vk,
-            ..Default::default()
+            roots,
+            operator: None,
+            pool_index: U256::ZERO,
+            nullifiers: TreeMap::new(b"n"),
+            all_messages_hash: U256::ZERO,
+            denominator: U256::ONE,
+            reserves: Reserves::new(b"d"),
         }
     }
 
@@ -94,17 +84,24 @@ impl MainPool {
         self.operator = Some(operator);
     }
 
-    /// Deposit native
     #[payable]
-    pub fn lock(&mut self) {
-        self.deposits.lock();
+    pub fn reserve(&mut self) {
+        self.reserves.reserve();
     }
 
     pub fn release(&mut self) -> Promise {
-        self.deposits.release()
+        self.reserves.release()
     }
 
-    #[payable]
+    pub fn pool_index(&self) -> String {
+        self.pool_index.to_string()
+    }
+
+    pub fn merkle_root(&self, index: String) -> String {
+        let index = U256::from_str(&index).unwrap();
+        self.roots.get(&index).unwrap().to_string()
+    }
+
     pub fn transact(&mut self, encoded_tx: Base64VecU8) {
         let operator_id = self.check_operator();
         let tx: Tx = Tx::try_from_slice(&encoded_tx.0).expect("invalid transaction format");
@@ -172,7 +169,7 @@ impl MainPool {
                     env::panic_str("Token amount must be negative and energy_amount must be zero.");
                 }
 
-                self.deposits.spend(&tx.deposit_address);
+                self.reserves.spend(&tx.deposit_address);
             }
             TxType::Transfer => {
                 if token_amount != U256::ZERO || energy_amount != U256::ZERO {
