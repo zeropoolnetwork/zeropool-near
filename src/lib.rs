@@ -1,16 +1,19 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use core::str::FromStr;
 use near_sdk::collections::TreeMap;
-use near_sdk::{env, json_types::Base64VecU8, near_bindgen, AccountId, Promise};
-use near_sdk::{PanicOnDefault, PromiseOrValue};
+use near_sdk::{
+    env,
+    json_types::{Base64VecU8, U128},
+    near_bindgen, require, AccountId, PanicOnDefault, Promise, PromiseOrValue,
+};
 
+use crate::lockup::Lockups;
 use crate::num::*;
-use crate::reserves::Reserves;
 use crate::tx_decoder::{Tx, TxType};
 use crate::verifier::{alt_bn128_groth16verify, VK};
 
+mod lockup;
 mod num;
-mod reserves;
 mod tx_decoder;
 mod verifier;
 
@@ -23,26 +26,33 @@ const R: U256 = U256::from_const_str(
 
 #[near_bindgen]
 #[derive(PanicOnDefault, BorshDeserialize, BorshSerialize)]
-pub struct MainPool {
+pub struct PoolContract {
+    /// Operator is an entity that can make new transactions.
     operator: Option<AccountId>,
-    tree_vk: VK,
+    /// Transaction verifying key.
     tx_vk: VK,
+    /// Merkle tree verifying key.
+    tree_vk: VK,
+    /// The next transaction index.
     pool_index: U256,
+    /// Merkle roots
     roots: TreeMap<U256, U256>,
+    /// Nullifiers for used accounts. "transaction index" => "nullifier".
     nullifiers: TreeMap<U256, U256>,
+    /// Accumulative transaction hash
     all_messages_hash: U256,
     denominator: U256,
-    /// Temporary deposits: imitation of EVM's allowance system
+    /// Temporary deposits: simulation of ethereum's allowance system.
     // TODO: Allow multiple deposits per user
-    reserves: Reserves,
+    lockups: Lockups,
 }
 
-impl MainPool {
+impl PoolContract {
     fn check_operator(&self) -> AccountId {
         let operator = self.operator.clone();
         if let Some(op) = operator {
             if env::signer_account_id() != op {
-                panic!("Only operator can call this function");
+                panic!("Only operator can call this method");
             }
 
             op
@@ -53,7 +63,8 @@ impl MainPool {
 }
 
 #[near_bindgen]
-impl MainPool {
+impl PoolContract {
+    /// Accepts transaction and merkle tree verifying keys.
     #[init]
     pub fn new(tx_vk: Base64VecU8, tree_vk: Base64VecU8) -> Self {
         assert!(!env::state_exists(), "Already initialized");
@@ -75,33 +86,51 @@ impl MainPool {
             nullifiers: TreeMap::new(b"n"),
             all_messages_hash: U256::ZERO,
             denominator: U256::ONE,
-            reserves: Reserves::new(b"d"),
+            lockups: Lockups::new(b"d"),
         }
     }
 
+    /// Set the operator (relayer).
+    /// The operator (relayer)
     #[private]
     pub fn set_operator(&mut self, operator: AccountId) {
         self.operator = Some(operator);
     }
 
+    // TODO: Multiple locks per account?
+    /// Can be called by a client to reserve a certain amount of yoctoNEAR for use in the `transact`
+    /// method. Each account can only have one lock.
     #[payable]
-    pub fn reserve(&mut self) {
-        self.reserves.reserve();
+    pub fn lock(&mut self, amount: U128) {
+        let attached_amount = env::attached_deposit();
+
+        require!(
+            amount.0 == attached_amount,
+            "Invalid attached amount: must be equal to the specified amount"
+        );
+
+        self.lockups.lock(amount.0);
     }
 
+    /// Release the funds previously reserved with the `lock` method.
     pub fn release(&mut self) -> Promise {
-        self.reserves.release()
+        self.lockups.release()
     }
 
+    /// Return the index of the next transaction.
     pub fn pool_index(&self) -> String {
         self.pool_index.to_string()
     }
 
+    /// Return the merkle root at the specified transaction index.
     pub fn merkle_root(&self, index: String) -> String {
         let index = U256::from_str(&index).unwrap();
         self.roots.get(&index).unwrap().to_string()
     }
 
+    /// The main transaction method.
+    /// Validates the transaction, handles deposits/withdrawals, pays fees to the operator.
+    /// Can only be called by the current operator.
     pub fn transact(&mut self, encoded_tx: Base64VecU8) -> PromiseOrValue<()> {
         let operator_id = self.check_operator();
         let tx: Tx = Tx::try_from_slice(&encoded_tx.0).expect("invalid transaction format");
@@ -142,7 +171,6 @@ impl MainPool {
         }
 
         // Set the nullifier
-        // TODO: LE or BE?
         let mut elements = [0u8; core::mem::size_of::<U256>() * 2];
         elements[..core::mem::size_of::<U256>()].copy_from_slice(&tx.out_commit.to_little_endian());
         elements[core::mem::size_of::<U256>()..].copy_from_slice(&tx.delta.to_little_endian());
@@ -171,7 +199,7 @@ impl MainPool {
                     env::panic_str("Token amount must be negative and energy_amount must be zero.");
                 }
 
-                self.reserves.spend(&tx.deposit_address);
+                self.lockups.spend(&tx.deposit_address);
             }
             TxType::Transfer => {
                 if token_amount != U256::ZERO || energy_amount != U256::ZERO {
@@ -209,7 +237,7 @@ impl MainPool {
         res
     }
 
-    // TODO: Multi-token support
+    // TODO: FT support
     // fn ft_on_transfer(
     //     &mut self,
     //     sender_id: AccountId,

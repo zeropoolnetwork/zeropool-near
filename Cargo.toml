@@ -9,8 +9,8 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 borsh = "0.9.3"
-near-sdk = { path = "../../near-sdk-rs/near-sdk", features = ["unstable"] }
-near-contract-standards = { path = "../../near-sdk-rs/near-contract-standards" }
+near-sdk = { git = "https://github.com/zeropoolnetwork/near-sdk-rs", branch = "feature/alt_bn128_new", features = ["unstable"] }
+near-contract-standards = { git = "https://github.com/zeropoolnetwork/near-sdk-rs", branch = "feature/alt_bn128_new" }
 num-derive = "0.3.3"
 num-traits = "0.2.15"
 ff-uint = { version = "0.2.4", default-features = false }

@@ -1,9 +1,5 @@
-near-blank-project
+ZeroPool smart contract for Near
 ==================
-
-This [React] app was initialized with [create-near-app]
-
-
 Quick Start
 ===========
 
@@ -11,33 +7,18 @@ To run this project locally:
 
 1. Prerequisites: Make sure you've installed [Node.js] ≥ 12
 2. Install dependencies: `yarn install`
-3. Run the local development server: `yarn dev` (see `package.json` for a
+3. Deploy the contract: `yarn deploy` (see `package.json` for a
    full list of `scripts` you can run with `yarn`)
 
-Now you'll have a local development environment backed by the NEAR TestNet!
-
-Go ahead and play with the app and the code. As you make code changes, the app will automatically reload.
-
-
-Exploring The Code
-==================
-
-1. The "backend" code lives in the `/contract` folder. See the README there for
-   more info.
-2. The frontend code lives in the `/frontend` folder. `/frontend/index.html` is a great
-   place to start exploring. Note that it loads in `/frontend/assets/js/index.js`, where you
-   can learn how the frontend connects to the NEAR blockchain.
-3. Tests: there are different kinds of tests for the frontend and the smart
-   contract. See `contract/README` for info about how it's tested. The frontend
-   code gets tested with [jest]. You can run both of these at once with `yarn
-   run test`.
-
+Work with the contract
+======================
+To interact with the contract, you can use the following methods:
+1. Call `lock` a certain amount (the `approve` method in `zeropoop-support-js`). This is a primitive lockup function used to simulate the approve system in Ethereum.
+2. Prepare data for a new private transaction on the client (`zeropoop-client-js` can be used to prepare and send the transaction to the relayer).
+3. The relayer then can serialize the transaction and send it to the contract (`transact`).
 
 Deploy
 ======
-
-Every smart contract in NEAR has its [own associated account][NEAR accounts]. When you run `yarn dev`, your smart contract gets deployed to the live NEAR TestNet with a throwaway account. When you're ready to make it permanent, here's how.
-
 
 Step 0: Install near-cli (optional)
 -------------------------------------

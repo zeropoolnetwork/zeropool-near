@@ -1,3 +1,5 @@
+//! Primitive lockups for the pool.
+
 use borsh::{BorshDeserialize, BorshSerialize};
 use near_sdk::{collections::LookupMap, env, require, AccountId, Promise};
 
@@ -10,50 +12,48 @@ struct Deposit {
 }
 
 #[derive(BorshSerialize, BorshDeserialize)]
-pub struct Reserves {
-    reserves: LookupMap<AccountId, Deposit>,
+pub struct Lockups {
+    lockups: LookupMap<AccountId, Deposit>,
     // TODO: Support tokens
 }
 
-impl Reserves {
+impl Lockups {
     pub fn new(prefix: &[u8]) -> Self {
         Self {
-            reserves: LookupMap::new(prefix),
+            lockups: LookupMap::new(prefix),
         }
     }
 
-    pub fn reserve(&mut self) {
+    pub fn lock(&mut self, amount: u128) {
         let account_id = env::signer_account_id();
         let timestamp = env::block_timestamp_ms();
-        let amount = env::attached_deposit();
 
         require!(
-            !self.reserves.contains_key(&account_id),
+            !self.lockups.contains_key(&account_id),
             "Deposit already exists"
         );
 
-        self.reserves
+        self.lockups
             .insert(&account_id, &Deposit { timestamp, amount });
     }
 
     pub fn release(&mut self) -> Promise {
         let account_id = env::signer_account_id();
-        let deposit = self.reserves.get(&account_id).expect("Deposit not found");
+        let deposit = self.lockups.get(&account_id).expect("Deposit not found");
         let timestamp = env::block_timestamp_ms();
         let elapsed = timestamp - deposit.timestamp;
-
         require!(
             elapsed > WITHDRAW_TIMEOUT_MS,
             "Cannot withdraw yet. Wait for the timeout."
         );
 
-        self.reserves.remove(&account_id);
+        self.lockups.remove(&account_id);
 
         Promise::new(account_id).transfer(deposit.amount)
     }
 
     pub fn spend(&mut self, account_id: &AccountId) {
-        let res = self.reserves.remove(account_id);
+        let res = self.lockups.remove(account_id);
         require!(res.is_some(), "No lock to spend");
     }
 }

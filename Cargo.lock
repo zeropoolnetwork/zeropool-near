@@ -585,6 +585,7 @@ dependencies = [
 [[package]]
 name = "near-contract-standards"
 version = "4.1.0-pre.1"
+source = "git+https://github.com/zeropoolnetwork/near-sdk-rs?branch=feature/alt_bn128_new#eec67bfa46781c90679e4d1a840fe84c4b55090d"
 dependencies = [
  "near-sdk",
  "schemars",
@@ -689,6 +690,7 @@ dependencies = [
 [[package]]
 name = "near-sdk"
 version = "4.1.0-pre.1"
+source = "git+https://github.com/zeropoolnetwork/near-sdk-rs?branch=feature/alt_bn128_new#eec67bfa46781c90679e4d1a840fe84c4b55090d"
 dependencies = [
  "base64 0.13.0",
  "borsh",
@@ -708,6 +710,7 @@ dependencies = [
 [[package]]
 name = "near-sdk-macros"
 version = "4.1.0-pre.1"
+source = "git+https://github.com/zeropoolnetwork/near-sdk-rs?branch=feature/alt_bn128_new#eec67bfa46781c90679e4d1a840fe84c4b55090d"
 dependencies = [
  "Inflector",
  "proc-macro2",
@@ -718,6 +721,7 @@ dependencies = [
 [[package]]
 name = "near-sys"
 version = "0.2.0"
+source = "git+https://github.com/zeropoolnetwork/near-sdk-rs?branch=feature/alt_bn128_new#eec67bfa46781c90679e4d1a840fe84c4b55090d"
 
 [[package]]
 name = "near-vm-errors"
