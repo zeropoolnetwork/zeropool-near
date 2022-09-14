@@ -47,20 +47,12 @@ Each account on NEAR can have at most one contract deployed to it. If you've alr
       near create-account zeropool.YOUR-NAME.testnet --masterAccount YOUR-NAME.testnet
 
 
-Step 2: set contract name in code
----------------------------------
-
-Modify the line in `src/config.js` that sets the account name of the contract. Set it to the account id you used above.
-
-    const CONTRACT_NAME = process.env.CONTRACT_NAME || 'near-blank-project.YOUR-NAME.testnet'
-
-
-Step 3: deploy!
+Step 2: deploy!
 ---------------
 
 builds & deploys smart contract to NEAR TestNet:
 
-    yarn deploy
+    ./deploy.sh "contract name"
 
 
 
