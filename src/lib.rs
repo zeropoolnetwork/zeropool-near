@@ -1,10 +1,8 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use core::str::FromStr;
 use near_sdk::collections::TreeMap;
 use near_sdk::{
-    env,
-    json_types::{Base64VecU8, U128},
-    near_bindgen, require, AccountId, PanicOnDefault, Promise, PromiseOrValue,
+    env, json_types::U128, near_bindgen, require, AccountId, PanicOnDefault, Promise,
+    PromiseOrValue,
 };
 
 use crate::lockup::Lockups;
@@ -23,19 +21,20 @@ const FIRST_ROOT: U256 = U256::from_const_str(
 const R: U256 = U256::from_const_str(
     "21888242871839275222246405745257275088548364400416034343698204186575808495617",
 );
+const HALF_MAX: U256 = U256([0, 0, u64::MAX, u64::MAX]);
 
 #[near_bindgen]
 #[derive(PanicOnDefault, BorshDeserialize, BorshSerialize)]
 pub struct PoolContract {
     /// Operator is an entity that can make new transactions.
-    operator: Option<AccountId>,
+    operator: AccountId,
     /// Transaction verifying key.
     tx_vk: VK,
     /// Merkle tree verifying key.
     tree_vk: VK,
     /// The next transaction index.
     pool_index: U256,
-    /// Merkle roots
+    /// Merkle roots. "transaction index" => "merkle root"
     roots: TreeMap<U256, U256>,
     /// Nullifiers for used accounts. "transaction index" => "nullifier".
     nullifiers: TreeMap<U256, U256>,
@@ -49,16 +48,11 @@ pub struct PoolContract {
 
 impl PoolContract {
     fn check_operator(&self) -> AccountId {
-        let operator = self.operator.clone();
-        if let Some(op) = operator {
-            if env::signer_account_id() != op {
-                panic!("Only operator can call this method");
-            }
-
-            op
-        } else {
-            env::panic_str("No operator set");
+        if env::signer_account_id() != self.operator {
+            panic!("Only operator can call this method");
         }
+
+        self.operator.clone()
     }
 }
 
@@ -66,22 +60,17 @@ impl PoolContract {
 impl PoolContract {
     /// Accepts transaction and merkle tree verifying keys.
     #[init]
-    pub fn new(tx_vk: Base64VecU8, tree_vk: Base64VecU8) -> Self {
+    pub fn new(#[serializer(borsh)] tx_vk: VK, #[serializer(borsh)] tree_vk: VK) -> Self {
         assert!(!env::state_exists(), "Already initialized");
 
         let mut roots = TreeMap::new(b"r");
         roots.insert(&U256::ZERO, &FIRST_ROOT);
 
-        let tx_vk = VK::deserialize(&mut &Vec::<u8>::from(tx_vk)[..])
-            .unwrap_or_else(|_| env::panic_str("Cannot deserialize vk."));
-        let tree_vk = VK::deserialize(&mut &Vec::<u8>::from(tree_vk)[..])
-            .unwrap_or_else(|_| env::panic_str("Cannot deserialize vk."));
-
         Self {
             tx_vk,
             tree_vk,
             roots,
-            operator: None,
+            operator: AccountId::new_unchecked("0".to_string()),
             pool_index: U256::ZERO,
             nullifiers: TreeMap::new(b"n"),
             all_messages_hash: U256::ZERO,
@@ -94,7 +83,7 @@ impl PoolContract {
     /// The operator (relayer)
     #[private]
     pub fn set_operator(&mut self, operator: AccountId) {
-        self.operator = Some(operator);
+        self.operator = operator;
     }
 
     // TODO: Multiple locks per account?
@@ -118,22 +107,22 @@ impl PoolContract {
     }
 
     /// Return the index of the next transaction.
-    pub fn pool_index(&self) -> String {
-        self.pool_index.to_string()
+    #[result_serializer(borsh)]
+    pub fn pool_index(&self) -> U256 {
+        self.pool_index
     }
 
     /// Return the merkle root at the specified transaction index.
-    pub fn merkle_root(&self, index: String) -> String {
-        let index = U256::from_str(&index).unwrap();
-        self.roots.get(&index).unwrap().to_string()
+    #[result_serializer(borsh)]
+    pub fn merkle_root(&self, #[serializer(borsh)] index: U256) -> U256 {
+        self.roots.get(&index).unwrap()
     }
 
     /// The main transaction method.
     /// Validates the transaction, handles deposits/withdrawals, pays fees to the operator.
     /// Can only be called by the current operator.
-    pub fn transact(&mut self, encoded_tx: Base64VecU8) -> PromiseOrValue<()> {
+    pub fn transact(&mut self, #[serializer(borsh)] tx: Tx) -> PromiseOrValue<()> {
         let operator_id = self.check_operator();
-        let tx: Tx = Tx::try_from_slice(&encoded_tx.0).expect("invalid transaction format");
         let message_hash = tx.memo.hash();
         let message_hash_num = U256::from_little_endian(&message_hash).unchecked_rem(R);
         let mut pool_index: U256 = self.pool_index;
@@ -193,9 +182,7 @@ impl PoolContract {
 
         match tx.tx_type {
             TxType::Deposit => {
-                if token_amount > U256::MAX.unchecked_div(U256::from(2u32))
-                    || energy_amount != U256::ZERO
-                {
+                if token_amount > HALF_MAX || energy_amount != U256::ZERO {
                     env::panic_str("Token amount must be negative and energy_amount must be zero.");
                 }
 

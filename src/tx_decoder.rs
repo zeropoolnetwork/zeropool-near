@@ -1,10 +1,10 @@
 use crate::{num::*, verifier::Proof};
-use borsh::BorshDeserialize;
+use borsh::{BorshSerialize, BorshDeserialize};
 use near_sdk::{env, AccountId};
 
 const BALANCE_SIZE: usize = 8;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshDeserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 #[repr(u16)]
 pub enum TxType {
     Deposit = 0,
@@ -12,7 +12,7 @@ pub enum TxType {
     Withdraw = 2,
 }
 
-#[derive(Debug, PartialEq, BorshDeserialize)]
+#[derive(Debug, PartialEq, BorshSerialize, BorshDeserialize)]
 pub struct Tx {
     pub nullifier: U256,
     pub out_commit: U256,
@@ -28,7 +28,7 @@ pub struct Tx {
     pub deposit_address: AccountId,
 }
 
-#[derive(Debug, PartialEq, BorshDeserialize)]
+#[derive(Debug, PartialEq, BorshSerialize, BorshDeserialize)]
 pub struct Memo(Vec<u8>);
 
 impl Memo {
