@@ -84,7 +84,7 @@ impl PoolContract {
 
     /// Accepts transaction and merkle tree verifying keys.
     #[init]
-    pub fn new(tx_vk: Base64VecU8, tree_vk: Base64VecU8) -> Self {
+    pub fn new(tx_vk: Base64VecU8, tree_vk: Base64VecU8, token_id: AccountId) -> Self {
         assert!(!env::state_exists(), "Already initialized");
 
         let tx_vk = VK::deserialize(&mut &Vec::<u8>::from(tx_vk)[..])
@@ -95,16 +95,18 @@ impl PoolContract {
         let mut roots = TreeMap::new(b"r");
         roots.insert(&U256::ZERO, &FIRST_ROOT);
 
+        let default_operator = env::signer_account_id();
+
         Self {
             tx_vk,
             tree_vk,
             roots,
-            operator: AccountId::new_unchecked("0".to_string()),
+            operator: default_operator,
             pool_index: U256::ZERO,
             nullifiers: TreeMap::new(b"n"),
             all_messages_hash: U256::ZERO,
             denominator: U256::ONE,
-            lockups: Lockups::new(),
+            lockups: Lockups::new(token_id),
         }
     }
 
@@ -126,18 +128,13 @@ impl PoolContract {
             "Invalid attached amount: must be equal to the specified amount"
         );
 
-        self.lockups.lock(
-            AccountId::new_unchecked("near".to_string()),
-            signer,
-            amount.0,
-        )
+        self.lockups.lock(signer, amount.0)
     }
 
     /// Release the funds previously reserved with the `lock` method.
     pub fn release(&mut self, id: u64) -> Promise {
         let signer = env::signer_account_id();
-        self.lockups
-            .release(AccountId::new_unchecked("near".to_string()), signer, id)
+        self.lockups.release(signer, id)
     }
 
     /// Return the index of the next transaction.
@@ -223,11 +220,8 @@ impl PoolContract {
                     env::panic_str("Token amount must be negative and energy_amount must be zero.");
                 }
 
-                self.lockups.spend(
-                    tx.token_id.clone(),
-                    tx.deposit_address.clone(),
-                    tx.deposit_id,
-                );
+                self.lockups
+                    .spend(tx.deposit_address.clone(), tx.deposit_id);
             }
             TxType::Transfer => {
                 if token_amount != U256::ZERO || energy_amount != U256::ZERO {
@@ -265,7 +259,6 @@ impl PoolContract {
             }
         }
 
-        // TODO: Subtract gas cost from the fee? Manual fee withdrawal?
         if fee > U256::ZERO {
             let fee = (fee.unchecked_mul(self.denominator).overflowing_neg().0)
                 .try_into()
@@ -302,12 +295,15 @@ impl PoolContract {
     }
 
     /// Support for FT versions of `lock` and `transact`.
-    pub fn ft_on_transfer(
+    fn ft_on_transfer(
         &mut self,
         sender_id: AccountId,
         amount: U128,
         msg: String,
     ) -> PromiseOrValue<U128> {
+        let ft_token_id = env::predecessor_account_id();
+        require!(ft_token_id == self.lockups.token_id, "Unsupported token");
+
         #[derive(Deserialize)]
         #[serde(tag = "method", content = "args")]
         #[serde(rename_all = "snake_case")]
@@ -322,8 +318,7 @@ impl PoolContract {
 
         match msg {
             Msg::Lock => {
-                let token_id = env::predecessor_account_id();
-                self.lockups.lock(token_id, sender_id, amount.0);
+                self.lockups.lock(sender_id, amount.0);
 
                 PromiseOrValue::Value(0u128.into())
             }

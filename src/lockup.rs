@@ -9,7 +9,6 @@ const WITHDRAW_TIMEOUT_MS: u64 = 5 * 60 * 1000;
 
 #[derive(BorshSerialize, BorshDeserialize, PartialEq)]
 struct DepositId {
-    token_id: AccountId,
     account_id: AccountId,
     nonce: u64,
 }
@@ -24,38 +23,35 @@ struct Deposit {
 pub struct Lockups {
     nonces: LookupMap<AccountId, u64>,
     lockups: LookupMap<DepositId, Deposit>,
+    pub(crate) token_id: AccountId,
 }
 
 impl Lockups {
-    pub fn new() -> Self {
+    pub fn new(token_id: AccountId) -> Self {
         Self {
             nonces: LookupMap::new("nonces".as_bytes()),
             lockups: LookupMap::new("lockups".as_bytes()),
+            token_id,
         }
     }
 
-    pub fn lock(&mut self, token_id: AccountId, account_id: AccountId, amount: u128) -> u64 {
+    pub fn lock(&mut self, account_id: AccountId, amount: u128) -> u64 {
         let timestamp = env::block_timestamp_ms();
         let nonce = self.nonces.get(&account_id).unwrap_or(0);
 
         self.nonces.insert(&account_id, &(nonce + 1));
         self.lockups.insert(
-            &DepositId {
-                token_id,
-                account_id,
-                nonce,
-            },
+            &DepositId { account_id, nonce },
             &Deposit { timestamp, amount },
         );
 
         nonce
     }
 
-    pub fn release(&mut self, token_id: AccountId, account_id: AccountId, nonce: u64) -> Promise {
+    pub fn release(&mut self, account_id: AccountId, nonce: u64) -> Promise {
         let deposit = self
             .lockups
             .get(&DepositId {
-                token_id: token_id.clone(),
                 account_id: account_id.clone(),
                 nonce,
             })
@@ -69,12 +65,11 @@ impl Lockups {
         );
 
         self.lockups.remove(&DepositId {
-            token_id: token_id.clone(),
             account_id: account_id.clone(),
             nonce,
         });
 
-        if token_id.as_str() == "near" {
+        if self.token_id.as_str() == "near" {
             Promise::new(account_id).transfer(deposit.amount.into())
         } else {
             Promise::new(account_id).function_call(
@@ -93,12 +88,8 @@ impl Lockups {
         }
     }
 
-    pub fn spend(&mut self, token_id: AccountId, account_id: AccountId, nonce: u64) {
-        let res = self.lockups.remove(&DepositId {
-            token_id,
-            account_id,
-            nonce,
-        });
+    pub fn spend(&mut self, account_id: AccountId, nonce: u64) {
+        let res = self.lockups.remove(&DepositId { account_id, nonce });
         require!(res.is_some(), "No deposit to spend");
     }
 }
