@@ -15,6 +15,7 @@ num-derive = "0.3.3"
 num-traits = "0.2.15"
 ff-uint = { version = "0.2.4", default-features = false }
 getrandom = { version = "0.2", features = ["js"] }
+serde = "1.0.145"
 
 [profile.release]
 codegen-units = 1

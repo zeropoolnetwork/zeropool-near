@@ -1,5 +1,5 @@
 use crate::{num::*, verifier::Proof};
-use borsh::{BorshSerialize, BorshDeserialize};
+use borsh::{BorshDeserialize, BorshSerialize};
 use near_sdk::{env, AccountId};
 
 const BALANCE_SIZE: usize = 8;
@@ -18,6 +18,7 @@ pub struct Tx {
     pub out_commit: U256,
     pub transfer_index: U256,
     pub energy_amount: U256,
+    pub token_id: AccountId,
     pub token_amount: U256,
     pub delta: U256,
     pub transact_proof: Proof,
@@ -26,6 +27,7 @@ pub struct Tx {
     pub tx_type: TxType,
     pub memo: Memo,
     pub deposit_address: AccountId,
+    pub deposit_id: u64,
 }
 
 #[derive(Debug, PartialEq, BorshSerialize, BorshDeserialize)]
