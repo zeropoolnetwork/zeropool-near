@@ -5,12 +5,14 @@
   "scripts": {
     "build": "npm run build:contract",
     "build:contract": "cargo build --all --target wasm32-unknown-unknown --release && cp ./target/wasm32-unknown-unknown/release/*.wasm ./out/main.wasm",
-    "deploy": "npm run build:contract && near dev-deploy",
+    "deploy": "./scripts/deploy",
+    "redeploy": "./scripts/redeploy",
     "test": "npm run build:contract && npm run test:unit",
     "test:unit": "cargo test"
   },
   "devDependencies": {
     "ava": "^4.2.0",
+    "near-api-js": "^1.0.0",
     "near-cli": "~3.3.0"
   }
 }

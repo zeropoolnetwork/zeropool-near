@@ -1,19 +1,36 @@
 //! Primitive lockups for the pool.
 
-use crate::MAX_GAS;
 use borsh::{BorshDeserialize, BorshSerialize};
-use near_sdk::serde_json::json;
-use near_sdk::{collections::LookupMap, env, require, AccountId, Promise};
+use near_sdk::{
+    env,
+    json_types::{U128, U64},
+    require,
+    serde_json::json,
+    store::{LookupMap, TreeMap},
+    AccountId, Promise,
+};
+use serde::Serialize;
+
+use crate::MAX_GAS;
 
 const WITHDRAW_TIMEOUT_MS: u64 = 5 * 60 * 1000;
 
-#[derive(BorshSerialize, BorshDeserialize, PartialEq)]
-struct DepositId {
-    account_id: AccountId,
-    nonce: u64,
+type Nonce = u64;
+
+#[derive(Serialize)]
+pub struct FullDeposit {
+    nonce: Nonce,
+    timestamp: U64,
+    amount: U128,
 }
 
 #[derive(BorshSerialize, BorshDeserialize)]
+struct Deposits {
+    nonce: Nonce,
+    deposits: TreeMap<Nonce, Deposit>,
+}
+
+#[derive(Clone, Copy, BorshSerialize, BorshDeserialize)]
 struct Deposit {
     timestamp: u64,
     amount: u128,
@@ -21,41 +38,65 @@ struct Deposit {
 
 #[derive(BorshSerialize, BorshDeserialize)]
 pub struct Lockups {
-    nonces: LookupMap<AccountId, u64>,
-    lockups: LookupMap<DepositId, Deposit>,
+    lockups: LookupMap<AccountId, Deposits>,
     pub(crate) token_id: AccountId,
 }
 
 impl Lockups {
     pub fn new(token_id: AccountId) -> Self {
         Self {
-            nonces: LookupMap::new("nonces".as_bytes()),
             lockups: LookupMap::new("lockups".as_bytes()),
             token_id,
         }
     }
 
+    pub fn account_deposits(&self, account_id: AccountId) -> Vec<FullDeposit> {
+        self.lockups
+            .get(&account_id)
+            .map(|deposits| {
+                deposits
+                    .deposits
+                    .iter()
+                    .map(|(nonce, deposit)| FullDeposit {
+                        nonce: *nonce,
+                        timestamp: deposit.timestamp.into(),
+                        amount: deposit.amount.into(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub fn lock(&mut self, account_id: AccountId, amount: u128) -> u64 {
         let timestamp = env::block_timestamp_ms();
-        let nonce = self.nonces.get(&account_id).unwrap_or(0);
 
-        self.nonces.insert(&account_id, &(nonce + 1));
-        self.lockups.insert(
-            &DepositId { account_id, nonce },
-            &Deposit { timestamp, amount },
-        );
+        let deposits = self.lockups.entry(account_id.clone()).or_insert_with(|| {
+            let key = env::sha256(format!("deposits{account_id}").as_bytes());
+            Deposits {
+                nonce: 0,
+                deposits: TreeMap::new(key),
+            }
+        });
+
+        let nonce = deposits.nonce;
+        deposits
+            .deposits
+            .insert(deposits.nonce, Deposit { timestamp, amount });
+        deposits.nonce += 1;
 
         nonce
     }
 
     pub fn release(&mut self, account_id: AccountId, nonce: u64) -> Promise {
-        let deposit = self
+        let deposits: &mut Deposits = self
             .lockups
-            .get(&DepositId {
-                account_id: account_id.clone(),
-                nonce,
-            })
-            .expect("no deposit");
+            .get_mut(&account_id)
+            .unwrap_or_else(|| env::panic_str("Account has no deposits"));
+
+        let deposit = *deposits.deposits.get(&nonce).unwrap_or_else(|| {
+            env::panic_str("Deposit not found");
+        });
+
         let timestamp = env::block_timestamp_ms();
         let elapsed = timestamp - deposit.timestamp;
 
@@ -64,10 +105,11 @@ impl Lockups {
             "Cannot withdraw yet. Wait for the timeout."
         );
 
-        self.lockups.remove(&DepositId {
-            account_id: account_id.clone(),
-            nonce,
-        });
+        deposits.deposits.remove(&nonce);
+
+        if deposits.deposits.is_empty() {
+            self.lockups.remove(&account_id);
+        }
 
         if self.token_id.as_str() == "near" {
             Promise::new(account_id).transfer(deposit.amount.into())
@@ -89,7 +131,18 @@ impl Lockups {
     }
 
     pub fn spend(&mut self, account_id: AccountId, nonce: u64) {
-        let res = self.lockups.remove(&DepositId { account_id, nonce });
+        let res = self.remove_deposit(account_id, nonce);
         require!(res.is_some(), "No deposit to spend");
+    }
+
+    fn remove_deposit(&mut self, account_id: AccountId, nonce: u64) -> Option<Deposit> {
+        let deposits: &mut Deposits = self.lockups.get_mut(&account_id)?;
+        let deposit = deposits.deposits.remove(&nonce);
+
+        if deposits.deposits.is_empty() {
+            self.lockups.remove(&account_id);
+        }
+
+        deposit
     }
 }

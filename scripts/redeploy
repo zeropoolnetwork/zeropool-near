@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+
+PARENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
+
+near delete "$1" "$2" && \
+near create-account "$1" --masterAccount "$2" && \
+"$PARENT_DIR"/deploy "$1"

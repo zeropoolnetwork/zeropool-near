@@ -1,6 +1,7 @@
-use crate::{num::*, verifier::Proof};
 use borsh::{BorshDeserialize, BorshSerialize};
 use near_sdk::{env, AccountId};
+
+use crate::{num::*, verifier::Proof};
 
 const BALANCE_SIZE: usize = 8;
 

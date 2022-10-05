@@ -1,17 +1,20 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use near_sdk::collections::TreeMap;
-use near_sdk::json_types::Base64VecU8;
-use near_sdk::serde_json::json;
 use near_sdk::{
-    env, json_types::U128, near_bindgen, require, serde_json, AccountId, Gas, PanicOnDefault,
-    Promise, PromiseOrValue,
+    collections::TreeMap,
+    env,
+    json_types::{Base64VecU8, U128},
+    near_bindgen, require, serde_json,
+    serde_json::json,
+    AccountId, Gas, PanicOnDefault, Promise, PromiseOrValue,
 };
 use serde::Deserialize;
 
-use crate::lockup::Lockups;
-use crate::num::*;
-use crate::tx_decoder::{Tx, TxType};
-use crate::verifier::{alt_bn128_groth16verify, VK};
+use crate::{
+    lockup::{FullDeposit, Lockups},
+    num::*,
+    tx_decoder::{Tx, TxType},
+    verifier::{alt_bn128_groth16verify, VK},
+};
 
 mod lockup;
 mod num;
@@ -135,6 +138,10 @@ impl PoolContract {
     pub fn release(&mut self, id: u64) -> Promise {
         let signer = env::signer_account_id();
         self.lockups.release(signer, id)
+    }
+
+    pub fn account_locks(&self, account_id: AccountId) -> Vec<FullDeposit> {
+        self.lockups.account_deposits(account_id)
     }
 
     /// Return the index of the next transaction.
@@ -295,7 +302,7 @@ impl PoolContract {
     }
 
     /// Support for FT versions of `lock` and `transact`.
-    fn ft_on_transfer(
+    pub fn ft_on_transfer(
         &mut self,
         sender_id: AccountId,
         amount: U128,
