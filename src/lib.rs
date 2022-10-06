@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use borsh::{BorshDeserialize, BorshSerialize};
 use near_sdk::{
     collections::TreeMap,
@@ -87,7 +89,12 @@ impl PoolContract {
 
     /// Accepts transaction and merkle tree verifying keys.
     #[init]
-    pub fn new(tx_vk: Base64VecU8, tree_vk: Base64VecU8, token_id: AccountId) -> Self {
+    pub fn new(
+        tx_vk: Base64VecU8,
+        tree_vk: Base64VecU8,
+        token_id: AccountId,
+        denominator: String,
+    ) -> Self {
         assert!(!env::state_exists(), "Already initialized");
 
         let tx_vk = VK::deserialize(&mut &Vec::<u8>::from(tx_vk)[..])
@@ -95,7 +102,7 @@ impl PoolContract {
         let tree_vk = VK::deserialize(&mut &Vec::<u8>::from(tree_vk)[..])
             .unwrap_or_else(|_| env::panic_str("Cannot deserialize vk."));
 
-        let mut roots = TreeMap::new(b"r");
+        let mut roots = TreeMap::new("roots".as_bytes());
         roots.insert(&U256::ZERO, &FIRST_ROOT);
 
         let default_operator = env::signer_account_id();
@@ -106,9 +113,11 @@ impl PoolContract {
             roots,
             operator: default_operator,
             pool_index: U256::ZERO,
-            nullifiers: TreeMap::new(b"n"),
+            nullifiers: TreeMap::new("nullifiers".as_bytes()),
             all_messages_hash: U256::ZERO,
-            denominator: U256::ONE,
+            denominator: U256::from_str(&denominator).unwrap_or_else(|_| {
+                env::panic_str("Cannot parse denominator. It should be a decimal number.")
+            }),
             lockups: Lockups::new(token_id),
         }
     }
@@ -117,6 +126,11 @@ impl PoolContract {
     #[private]
     pub fn set_operator(&mut self, operator: AccountId) {
         self.operator = operator;
+    }
+
+    #[result_serializer(borsh)]
+    pub fn denominator(&self) -> U256 {
+        self.denominator
     }
 
     /// Can be called by a client to reserve a certain amount of yoctoNEAR for use in the `transact`
@@ -140,6 +154,10 @@ impl PoolContract {
         self.lockups.release(signer, id)
     }
 
+    /// Get all locks for the specified account in JSON format.
+    /// ```json
+    /// [{ nonce: 123, amount: "123", timestamp: "123" }, ...]
+    /// ```
     pub fn account_locks(&self, account_id: AccountId) -> Vec<FullDeposit> {
         self.lockups.account_deposits(account_id)
     }
@@ -162,7 +180,7 @@ impl PoolContract {
     pub fn transact(&mut self, #[serializer(borsh)] tx: Tx) -> PromiseOrValue<U128> {
         let operator_id = self.check_operator();
         let message_hash = tx.memo.hash();
-        let message_hash_num = U256::from_little_endian(&message_hash).unchecked_rem(R);
+        let message_hash_num = U256::from_big_endian(&message_hash).unchecked_rem(R);
         let mut pool_index: U256 = self.pool_index;
         let root_before = self
             .roots
@@ -170,13 +188,13 @@ impl PoolContract {
             .unwrap_or_else(|| env::panic_str("Root not found"));
 
         // Verify transaction proof
-        const POOL_ID: U256 = U256::ONE;
+        const POOL_ID: U256 = U256::ZERO;
         const DELTA_SIZE: u32 = 256;
         let delta = tx.delta.unchecked_add(POOL_ID.unchecked_shr(DELTA_SIZE));
 
         let transact_inputs = [
             root_before,
-            tx.nullifier.into(),
+            tx.nullifier,
             tx.out_commit,
             delta,
             message_hash_num,
@@ -213,7 +231,7 @@ impl PoolContract {
         hashes[..core::mem::size_of::<U256>()]
             .copy_from_slice(&self.all_messages_hash.to_little_endian());
         hashes[core::mem::size_of::<U256>()..].copy_from_slice(&message_hash);
-        let new_all_messages_hash = U256::from_little_endian(&env::keccak256_array(&hashes));
+        let new_all_messages_hash = U256::from_big_endian(&env::keccak256_array(&hashes));
 
         let fee = tx.memo.fee();
         let token_amount = tx.token_amount.overflowing_add(fee).0;

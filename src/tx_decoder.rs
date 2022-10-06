@@ -6,7 +6,6 @@ use crate::{num::*, verifier::Proof};
 const BALANCE_SIZE: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-#[repr(u16)]
 pub enum TxType {
     Deposit = 0,
     Transfer = 1,
