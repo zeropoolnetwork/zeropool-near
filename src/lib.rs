@@ -5,11 +5,10 @@ use near_sdk::{
     collections::TreeMap,
     env,
     json_types::{Base64VecU8, U128},
-    near_bindgen, require, serde_json,
+    near_bindgen, require,
     serde_json::json,
     AccountId, Gas, PanicOnDefault, Promise, PromiseOrValue,
 };
-use serde::Deserialize;
 
 use crate::{
     lockup::{FullDeposit, Lockups},
@@ -67,40 +66,18 @@ impl PoolContract {
 
 #[near_bindgen]
 impl PoolContract {
-    // #[init]
-    // pub fn new(#[serializer(borsh)] tx_vk: VK, #[serializer(borsh)] tree_vk: VK) -> Self {
-    //     assert!(!env::state_exists(), "Already initialized");
-    //
-    //     let mut roots = TreeMap::new(b"r");
-    //     roots.insert(&U256::ZERO, &FIRST_ROOT);
-    //
-    //     Self {
-    //         tx_vk,
-    //         tree_vk,
-    //         roots,
-    //         operator: AccountId::new_unchecked("0".to_string()),
-    //         pool_index: U256::ZERO,
-    //         nullifiers: TreeMap::new(b"n"),
-    //         all_messages_hash: U256::ZERO,
-    //         denominator: U256::ONE,
-    //         lockups: Lockups::new(),
-    //     }
-    // }
-
-    /// Accepts transaction and merkle tree verifying keys.
     #[init]
-    pub fn new(
-        tx_vk: Base64VecU8,
-        tree_vk: Base64VecU8,
-        token_id: AccountId,
-        denominator: String,
+    pub fn new_bin(
+        #[serializer(borsh)] tx_vk: VK,
+        #[serializer(borsh)] tree_vk: VK,
+        #[serializer(borsh)] token_id: AccountId,
+        #[serializer(borsh)] denominator: U256,
     ) -> Self {
         assert!(!env::state_exists(), "Already initialized");
 
-        let tx_vk = VK::deserialize(&mut &Vec::<u8>::from(tx_vk)[..])
-            .unwrap_or_else(|_| env::panic_str("Cannot deserialize vk."));
-        let tree_vk = VK::deserialize(&mut &Vec::<u8>::from(tree_vk)[..])
-            .unwrap_or_else(|_| env::panic_str("Cannot deserialize vk."));
+        if token_id.as_str() != "near" && cfg!(not(feature = "ft")) {
+            env::panic_str("Non NEAR tokens are not supported");
+        }
 
         let mut roots = TreeMap::new("roots".as_bytes());
         roots.insert(&U256::ZERO, &FIRST_ROOT);
@@ -115,9 +92,48 @@ impl PoolContract {
             pool_index: U256::ZERO,
             nullifiers: TreeMap::new("nullifiers".as_bytes()),
             all_messages_hash: U256::ZERO,
-            denominator: U256::from_str(&denominator).unwrap_or_else(|_| {
-                env::panic_str("Cannot parse denominator. It should be a decimal number.")
-            }),
+            denominator,
+            lockups: Lockups::new(token_id),
+        }
+    }
+
+    /// Accepts transaction and merkle tree verifying keys.
+    #[init]
+    pub fn new(
+        tx_vk: Base64VecU8,
+        tree_vk: Base64VecU8,
+        token_id: AccountId,
+        denominator: String,
+    ) -> Self {
+        assert!(!env::state_exists(), "Already initialized");
+
+        if token_id.as_str() != "near" && cfg!(not(feature = "ft")) {
+            env::panic_str("Non NEAR tokens are not supported");
+        }
+
+        let tx_vk = VK::deserialize(&mut &Vec::<u8>::from(tx_vk)[..])
+            .unwrap_or_else(|_| env::panic_str("Cannot deserialize vk."));
+        let tree_vk = VK::deserialize(&mut &Vec::<u8>::from(tree_vk)[..])
+            .unwrap_or_else(|_| env::panic_str("Cannot deserialize vk."));
+
+        let denominator = U256::from_str(&denominator).unwrap_or_else(|_| {
+            env::panic_str("Cannot parse denominator. It should be a decimal number.")
+        });
+
+        let mut roots = TreeMap::new("roots".as_bytes());
+        roots.insert(&U256::ZERO, &FIRST_ROOT);
+
+        let default_operator = env::signer_account_id();
+
+        Self {
+            tx_vk,
+            tree_vk,
+            roots,
+            operator: default_operator,
+            pool_index: U256::ZERO,
+            nullifiers: TreeMap::new("nullifiers".as_bytes()),
+            all_messages_hash: U256::ZERO,
+            denominator,
             lockups: Lockups::new(token_id),
         }
     }
@@ -265,6 +281,8 @@ impl PoolContract {
 
                 if tx.token_id.as_str() == "near" {
                     res = PromiseOrValue::Promise(Promise::new(dest).transfer(withdraw_amount));
+                } else if cfg!(not(feature = "ft")) {
+                    env::panic_str("Non NEAR tokens are not supported");
                 } else {
                     res = PromiseOrValue::Promise(
                         Promise::new(tx.token_id.clone()).function_call(
@@ -291,6 +309,8 @@ impl PoolContract {
 
             if tx.token_id.as_str() == "near" {
                 res = PromiseOrValue::Promise(Promise::new(operator_id).transfer(fee));
+            } else if cfg!(not(feature = "ft")) {
+                env::panic_str("Non NEAR tokens are not supported");
             } else {
                 res = PromiseOrValue::Promise(
                     Promise::new(tx.token_id).function_call(
@@ -319,6 +339,7 @@ impl PoolContract {
         res
     }
 
+    #[cfg(feature = "ft")]
     /// Support for FT versions of `lock` and `transact`.
     pub fn ft_on_transfer(
         &mut self,
@@ -335,8 +356,6 @@ impl PoolContract {
         enum Msg {
             /// { "method": "lock" }
             Lock,
-            /// { "method": "transact", "args": { "tx": "base64 encoded tx" } }
-            Transact { tx: Base64VecU8 },
         }
 
         let msg: Msg = serde_json::from_str(&msg).unwrap_or_else(|_| env::panic_str("Invalid msg"));
@@ -346,11 +365,6 @@ impl PoolContract {
                 self.lockups.lock(sender_id, amount.0);
 
                 PromiseOrValue::Value(0u128.into())
-            }
-            Msg::Transact { tx } => {
-                let tx = Tx::try_from_slice(&tx.0)
-                    .unwrap_or_else(|_| env::panic_str("Invalid tx format"));
-                self.transact(tx)
             }
         }
     }

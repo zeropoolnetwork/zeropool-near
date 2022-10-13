@@ -30,4 +30,5 @@ hex-literal = "0.3.4"
 
 [features]
 default = ["borsh_support"]
+ft = []
 borsh_support = ["ff-uint/borsh_support"]
