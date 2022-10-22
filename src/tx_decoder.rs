@@ -26,7 +26,7 @@ pub struct Tx {
     pub tree_proof: Proof,
     pub tx_type: TxType,
     pub memo: Memo,
-    pub deposit_address: AccountId,
+    pub deposit_address: AccountId, // TODO: Make optional
     pub deposit_id: u64,
 }
 
@@ -48,7 +48,9 @@ impl Memo {
     #[inline]
     pub fn address(&self) -> AccountId {
         const OFFSET: usize = BALANCE_SIZE * 2;
-        AccountId::try_from_slice(&self.0[OFFSET..]).expect("invalid address")
+        let str_length = u32::from_le_bytes(self.0[OFFSET..(OFFSET + 4)].try_into().unwrap());
+        let full_offset = OFFSET + 4 + str_length as usize;
+        AccountId::try_from_slice(&self.0[OFFSET..full_offset]).expect("invalid address")
     }
 
     #[inline]

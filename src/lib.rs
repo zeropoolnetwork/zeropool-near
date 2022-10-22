@@ -5,7 +5,7 @@ use near_sdk::{
     collections::TreeMap,
     env,
     json_types::{Base64VecU8, U128},
-    near_bindgen, require,
+    log, near_bindgen, require,
     serde_json::json,
     AccountId, Gas, PanicOnDefault, Promise, PromiseOrValue,
 };
@@ -257,6 +257,7 @@ impl PoolContract {
 
         match tx.tx_type {
             TxType::Deposit => {
+                log!("Deposit: {}", token_amount);
                 if token_amount > HALF_MAX || energy_amount != U256::ZERO {
                     env::panic_str("Token amount must be negative and energy_amount must be zero.");
                 }
@@ -265,19 +266,21 @@ impl PoolContract {
                     .spend(tx.deposit_address.clone(), tx.deposit_id);
             }
             TxType::Transfer => {
+                log!("Transfer: {}", token_amount);
                 if token_amount != U256::ZERO || energy_amount != U256::ZERO {
                     env::panic_str("Transfer tx must have zero token and energy amount.");
                 }
             }
             TxType::Withdraw => {
                 let dest = tx.memo.address();
-
-                let withdraw_amount = (token_amount
+                let withdraw_amount = token_amount
                     .overflowing_neg()
                     .0
-                    .unchecked_mul(self.denominator))
-                .try_into()
-                .unwrap();
+                    .unchecked_mul(self.denominator);
+
+                log!("Withdrawal to {}: {}", dest, withdraw_amount);
+
+                let withdraw_amount = withdraw_amount.try_into().unwrap();
 
                 if tx.token_id.as_str() == "near" {
                     res = PromiseOrValue::Promise(Promise::new(dest).transfer(withdraw_amount));
@@ -340,7 +343,7 @@ impl PoolContract {
     }
 
     #[cfg(feature = "ft")]
-    /// Support for FT versions of `lock` and `transact`.
+    /// Support for FT version of `lock`.
     pub fn ft_on_transfer(
         &mut self,
         sender_id: AccountId,
