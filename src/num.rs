@@ -1,8 +1,18 @@
-use ff_uint::construct_uint;
 pub use ff_uint::Uint;
+use ff_uint::{construct_primefield_params, construct_uint};
 
 construct_uint! {
     pub struct U256(4);
+}
+
+construct_primefield_params! {
+    pub struct Fr(super::U256);
+
+    impl PrimeFieldParams for Fr {
+        type Inner = super::U256;
+        const MODULUS: &'static str = "21888242871839275222246405745257275088548364400416034343698204186575808495617";
+        const GENERATOR: &'static str = "7";
+   }
 }
 
 impl U256 {

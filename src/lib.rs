@@ -1,6 +1,7 @@
 use std::str::FromStr;
 
 use borsh::{BorshDeserialize, BorshSerialize};
+use ff_uint::{Num, PrimeField};
 use near_sdk::{
     collections::TreeMap,
     env,
@@ -13,10 +14,9 @@ use near_sdk::{
 use crate::{
     lockup::{FullDeposit, Lockups},
     num::*,
-    tx_decoder::{Tx, TxType},
+    tx_decoder::{parse_delta, Tx, TxType},
     verifier::{alt_bn128_groth16verify, VK},
 };
-
 mod lockup;
 mod num;
 mod tx_decoder;
@@ -155,13 +155,17 @@ impl PoolContract {
     pub fn lock(&mut self, amount: U128) -> u64 {
         let attached_amount = env::attached_deposit();
         let signer = env::signer_account_id();
+        let signer_pk = env::signer_account_pk();
 
         require!(
             amount.0 == attached_amount,
             "Invalid attached amount: must be equal to the specified amount"
         );
 
-        self.lockups.lock(signer, amount.0)
+        let pk_serialized = signer_pk.try_to_vec().unwrap();
+        let pk = near_crypto::PublicKey::try_from_slice(&pk_serialized).unwrap();
+
+        self.lockups.lock(signer, amount.0, pk)
     }
 
     /// Release the funds previously reserved with the `lock` method.
@@ -217,6 +221,7 @@ impl PoolContract {
         ];
 
         if !alt_bn128_groth16verify(self.tx_vk.clone(), tx.transact_proof, &transact_inputs) {
+            log!("Transaction proof inputs:\nroot_before: {},\nnullifier: {},\nout_commit: {},\ndelta: {},\nmessage_hash_num: {}", root_before, tx.nullifier, tx.out_commit, delta, message_hash_num);
             env::panic_str("Transaction proof is invalid.");
         }
 
@@ -224,13 +229,27 @@ impl PoolContract {
             env::panic_str("Double spend.");
         }
 
-        if tx.transfer_index > pool_index.into() {
+        let (token_amount, energy_amount, transfer_index, _) =
+            parse_delta(Num::new(Fr::from_uint(delta).unwrap()));
+        let (token_amount, energy_amount, transfer_index) = (
+            token_amount.to_uint().0,
+            energy_amount.to_uint().0,
+            transfer_index.to_uint().0,
+        );
+
+        if transfer_index > pool_index.into() {
             env::panic_str("Transfer index is greater than pool index.");
         }
 
         // Verify tree proof
         let tree_inputs = [root_before, tx.root_after, tx.out_commit];
         if !alt_bn128_groth16verify(self.tree_vk.clone(), tx.tree_proof, &tree_inputs) {
+            log!(
+                "Tree proof inputs:\nroot_before: {},\nroot_after: {},\nout_commit: {}",
+                root_before,
+                tx.root_after,
+                tx.out_commit
+            );
             env::panic_str("Tree proof is invalid.");
         }
 
@@ -250,8 +269,8 @@ impl PoolContract {
         let new_all_messages_hash = U256::from_big_endian(&env::keccak256_array(&hashes));
 
         let fee = tx.memo.fee();
-        let token_amount = tx.token_amount.overflowing_add(fee).0;
-        let energy_amount = tx.energy_amount;
+        let token_amount = token_amount.overflowing_add(fee).0;
+        let energy_amount = energy_amount;
 
         let mut res = PromiseOrValue::Value(0u128.into());
 
@@ -262,8 +281,14 @@ impl PoolContract {
                     env::panic_str("Token amount must be negative and energy_amount must be zero.");
                 }
 
-                self.lockups
-                    .spend(tx.deposit_address.clone(), tx.deposit_id);
+                let deposit_data = tx.memo.deposit_data();
+
+                self.lockups.spend(
+                    &deposit_data.deposit_address,
+                    deposit_data.deposit_id,
+                    &deposit_data.deposit_signature,
+                    tx.nullifier,
+                );
             }
             TxType::Transfer => {
                 log!("Transfer: {}", token_amount);
@@ -272,7 +297,7 @@ impl PoolContract {
                 }
             }
             TxType::Withdraw => {
-                let dest = tx.memo.address();
+                let dest = tx.memo.withdraw_address();
                 let withdraw_amount = token_amount
                     .overflowing_neg()
                     .0

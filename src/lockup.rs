@@ -1,17 +1,19 @@
 //! Primitive lockups for the pool.
 
 use borsh::{BorshDeserialize, BorshSerialize};
+use ff_uint::Uint;
+use near_crypto::{PublicKey, Signature};
 use near_sdk::{
     env,
     json_types::{U128, U64},
-    require,
+    log, require,
     serde_json::json,
     store::{LookupMap, TreeMap},
     AccountId, Promise,
 };
 use serde::Serialize;
 
-use crate::MAX_GAS;
+use crate::{num::U256, MAX_GAS};
 
 const WITHDRAW_TIMEOUT_MS: u64 = 5 * 60 * 1000;
 
@@ -30,10 +32,11 @@ struct Deposits {
     deposits: TreeMap<Nonce, Deposit>,
 }
 
-#[derive(Clone, Copy, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
 struct Deposit {
     timestamp: u64,
     amount: u128,
+    public_key: PublicKey,
 }
 
 #[derive(BorshSerialize, BorshDeserialize)]
@@ -67,7 +70,7 @@ impl Lockups {
             .unwrap_or_default()
     }
 
-    pub fn lock(&mut self, account_id: AccountId, amount: u128) -> u64 {
+    pub fn lock(&mut self, account_id: AccountId, amount: u128, public_key: PublicKey) -> u64 {
         let timestamp = env::block_timestamp_ms();
 
         let deposits = self.lockups.entry(account_id.clone()).or_insert_with(|| {
@@ -79,9 +82,14 @@ impl Lockups {
         });
 
         let nonce = deposits.nonce;
-        deposits
-            .deposits
-            .insert(deposits.nonce, Deposit { timestamp, amount });
+        deposits.deposits.insert(
+            deposits.nonce,
+            Deposit {
+                timestamp,
+                amount,
+                public_key,
+            },
+        );
         deposits.nonce += 1;
 
         nonce
@@ -93,7 +101,7 @@ impl Lockups {
             .get_mut(&account_id)
             .unwrap_or_else(|| env::panic_str("Account has no deposits"));
 
-        let deposit = *deposits.deposits.get(&nonce).unwrap_or_else(|| {
+        let deposit = deposits.deposits.get(&nonce).cloned().unwrap_or_else(|| {
             env::panic_str("Deposit not found");
         });
 
@@ -130,19 +138,30 @@ impl Lockups {
         }
     }
 
-    pub fn spend(&mut self, account_id: AccountId, nonce: u64) {
-        let res = self.remove_deposit(account_id, nonce);
-        require!(res.is_some(), "No deposit to spend");
-    }
+    pub fn spend(
+        &mut self,
+        account_id: &AccountId,
+        nonce: u64,
+        signature: &Signature,
+        nullifier: U256,
+    ) {
+        log!("Spending lock {} for {}", nonce, account_id);
 
-    fn remove_deposit(&mut self, account_id: AccountId, nonce: u64) -> Option<Deposit> {
-        let deposits: &mut Deposits = self.lockups.get_mut(&account_id)?;
-        let deposit = deposits.deposits.remove(&nonce);
+        let deposits: &mut Deposits = self
+            .lockups
+            .get_mut(account_id)
+            .expect("Account has no deposits");
+
+        if let Some(deposit) = deposits.deposits.get(&nonce).cloned() {
+            if !signature.verify(&nullifier.to_little_endian(), &deposit.public_key) {
+                env::panic_str("Invalid deposit signature");
+            }
+        } else {
+            env::panic_str("Lock not found");
+        }
 
         if deposits.deposits.is_empty() {
             self.lockups.remove(&account_id);
         }
-
-        deposit
     }
 }
