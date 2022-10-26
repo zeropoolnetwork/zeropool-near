@@ -28,16 +28,14 @@ pub struct Tx {
 }
 
 #[derive(Debug, PartialEq, BorshSerialize, BorshDeserialize)]
-pub struct Memo(Vec<u8>);
-
-impl Memo {}
-
-#[derive(Debug, PartialEq, BorshSerialize, BorshDeserialize)]
 pub struct DepositData {
+    pub deposit_signature: Signature,
     pub deposit_address: AccountId,
     pub deposit_id: u64,
-    pub deposit_signature: Signature,
 }
+
+#[derive(Debug, PartialEq, BorshSerialize, BorshDeserialize)]
+pub struct Memo(Vec<u8>);
 
 impl Memo {
     #[inline]
