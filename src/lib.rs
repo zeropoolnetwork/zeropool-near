@@ -1,6 +1,7 @@
 use std::str::FromStr;
 
 use borsh::{BorshDeserialize, BorshSerialize};
+use ed25519_dalek::PublicKey;
 use ff_uint::{Num, PrimeField};
 use near_sdk::{
     collections::TreeMap,
@@ -162,8 +163,8 @@ impl PoolContract {
             "Invalid attached amount: must be equal to the specified amount"
         );
 
-        let pk_serialized = signer_pk.try_to_vec().unwrap();
-        let pk = near_crypto::PublicKey::try_from_slice(&pk_serialized).unwrap();
+        let pk_serialized = &signer_pk.as_bytes()[1..];
+        let pk = PublicKey::from_bytes(&pk_serialized).expect("Invalid public key");
 
         self.lockups.lock(signer, amount.0, pk)
     }
@@ -286,7 +287,7 @@ impl PoolContract {
                 self.lockups.spend(
                     &deposit_data.deposit_address,
                     deposit_data.deposit_id,
-                    &deposit_data.deposit_signature,
+                    &deposit_data.signature(),
                     tx.nullifier,
                 );
             }

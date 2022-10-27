@@ -583,16 +583,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "near-account-id"
-version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d924011380de759c3dc6fdbcda37a19a5c061f56dab69d28a34ecee765e23e4"
-dependencies = [
- "borsh",
- "serde",
-]
-
-[[package]]
 name = "near-contract-standards"
 version = "4.1.0-pre.1"
 source = "git+https://github.com/zeropoolnetwork/near-sdk-rs?branch=feature/alt_bn128_new#eec67bfa46781c90679e4d1a840fe84c4b55090d"
@@ -617,37 +607,12 @@ dependencies = [
  "curve25519-dalek",
  "derive_more",
  "ed25519-dalek",
- "near-account-id 0.14.0",
+ "near-account-id",
  "once_cell",
  "parity-secp256k1",
  "primitive-types",
  "rand 0.7.3",
  "rand_core 0.5.1",
- "serde",
- "serde_json",
- "subtle",
- "thiserror",
-]
-
-[[package]]
-name = "near-crypto"
-version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7754612b47737d277fb818e9fdbb1406e90f9e57151c55c3584d714421976cb6"
-dependencies = [
- "arrayref",
- "blake2",
- "borsh",
- "bs58",
- "c2-chacha",
- "curve25519-dalek",
- "derive_more",
- "ed25519-dalek",
- "near-account-id 0.15.0",
- "once_cell",
- "primitive-types",
- "rand 0.7.3",
- "secp256k1",
  "serde",
  "serde_json",
  "subtle",
@@ -667,7 +632,7 @@ dependencies = [
  "derive_more",
  "easy-ext",
  "hex",
- "near-crypto 0.14.0",
+ "near-crypto",
  "near-primitives-core",
  "near-rpc-error-macro",
  "near-vm-errors",
@@ -693,7 +658,7 @@ dependencies = [
  "borsh",
  "bs58",
  "derive_more",
- "near-account-id 0.14.0",
+ "near-account-id",
  "num-rational",
  "serde",
  "sha2 0.10.2",
@@ -730,7 +695,7 @@ dependencies = [
  "base64 0.13.0",
  "borsh",
  "bs58",
- "near-crypto 0.14.0",
+ "near-crypto",
  "near-primitives",
  "near-primitives-core",
  "near-sdk-macros",
@@ -765,7 +730,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0da466a30f0446639cbd788c30865086fac3e8dcb07a79e51d2b0775ed4261e"
 dependencies = [
  "borsh",
- "near-account-id 0.14.0",
+ "near-account-id",
  "near-rpc-error-macro",
  "serde",
 ]
@@ -780,8 +745,8 @@ dependencies = [
  "borsh",
  "bs58",
  "byteorder",
- "near-account-id 0.14.0",
- "near-crypto 0.14.0",
+ "near-account-id",
+ "near-crypto",
  "near-primitives",
  "near-primitives-core",
  "near-vm-errors",
@@ -1115,25 +1080,6 @@ dependencies = [
  "quote",
  "serde_derive_internals",
  "syn",
-]
-
-[[package]]
-name = "secp256k1"
-version = "0.24.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff55dc09d460954e9ef2fa8a7ced735a964be9981fd50e870b2b3b0705e14964"
-dependencies = [
- "rand 0.8.5",
- "secp256k1-sys",
-]
-
-[[package]]
-name = "secp256k1-sys"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83080e2c2fc1006e625be82e5d1eb6a43b7fd9578b617fcc55814daf286bba4b"
-dependencies = [
- "cc",
 ]
 
 [[package]]
@@ -1561,11 +1507,11 @@ name = "zeropool-near-pool"
 version = "1.0.0"
 dependencies = [
  "borsh",
+ "ed25519-dalek",
  "ff-uint",
  "getrandom 0.2.7",
  "hex-literal",
  "near-contract-standards",
- "near-crypto 0.15.0",
  "near-sdk",
  "num-derive",
  "num-traits",

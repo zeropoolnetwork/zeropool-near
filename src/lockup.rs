@@ -1,8 +1,8 @@
 //! Primitive lockups for the pool.
 
 use borsh::{BorshDeserialize, BorshSerialize};
+use ed25519_dalek::{PublicKey, Signature, Verifier, PUBLIC_KEY_LENGTH};
 use ff_uint::Uint;
-use near_crypto::{PublicKey, Signature};
 use near_sdk::{
     env,
     json_types::{U128, U64},
@@ -36,7 +36,7 @@ struct Deposits {
 struct Deposit {
     timestamp: u64,
     amount: u128,
-    public_key: PublicKey,
+    public_key: [u8; PUBLIC_KEY_LENGTH],
 }
 
 #[derive(BorshSerialize, BorshDeserialize)]
@@ -80,6 +80,8 @@ impl Lockups {
                 deposits: TreeMap::new(key),
             }
         });
+
+        let public_key = public_key.to_bytes();
 
         let nonce = deposits.nonce;
         deposits.deposits.insert(
@@ -153,9 +155,11 @@ impl Lockups {
             .expect("Account has no deposits");
 
         if let Some(deposit) = deposits.deposits.get(&nonce).cloned() {
-            if !signature.verify(&nullifier.to_little_endian(), &deposit.public_key) {
-                env::panic_str("Invalid deposit signature");
-            }
+            let public_key =
+                PublicKey::from_bytes(&deposit.public_key).expect("Invalid public key");
+            public_key
+                .verify(&nullifier.to_big_endian(), signature)
+                .expect("Invalid deposit signature");
         } else {
             env::panic_str("Lock not found");
         }

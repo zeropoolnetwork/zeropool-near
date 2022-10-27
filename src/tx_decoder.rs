@@ -1,6 +1,6 @@
 use borsh::{BorshDeserialize, BorshSerialize};
+use ed25519_dalek::{Signature, SIGNATURE_LENGTH};
 use ff_uint::{Num, NumRepr, PrimeField};
-use near_crypto::Signature;
 use near_sdk::{env, AccountId};
 
 use crate::{num::*, verifier::Proof};
@@ -29,9 +29,15 @@ pub struct Tx {
 
 #[derive(Debug, PartialEq, BorshSerialize, BorshDeserialize)]
 pub struct DepositData {
-    pub deposit_signature: Signature,
+    pub deposit_signature: [u8; SIGNATURE_LENGTH],
     pub deposit_address: AccountId,
     pub deposit_id: u64,
+}
+
+impl DepositData {
+    pub fn signature(&self) -> Signature {
+        Signature::from_bytes(&self.deposit_signature).expect("Invalid signature")
+    }
 }
 
 #[derive(Debug, PartialEq, BorshSerialize, BorshDeserialize)]
