@@ -402,3 +402,299 @@ impl PoolContract {
         }
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use libzeropool_rs::{
+        client::{state::State, TxType as ZpTxType, UserAccount},
+        libzeropool::{
+            circuit::{tree::tree_update, tx::c_transfer},
+            constants::*,
+            fawkes_crypto::backend::bellman_groth16::{
+                engines::{Bn256, Engine},
+                prover::prove,
+                Parameters,
+            },
+            native::{
+                boundednum::BoundedNum,
+                tree::{TreePub, TreeSec},
+                tx::{TransferPub, TransferSec},
+            },
+            POOL_PARAMS,
+        },
+    };
+    use near_crypto::{KeyType, SecretKey, Signer};
+    use near_sdk::{
+        test_utils::{accounts, VMContextBuilder},
+        testing_env, PublicKey as SdkPublicKey,
+    };
+
+    use super::*;
+    use crate::{
+        lockup::WITHDRAW_TIMEOUT_MS,
+        tx_decoder::{DepositData, DepositDataForSigning, Memo, OptDepositData},
+    };
+
+    fn signer() -> AccountId {
+        accounts(0)
+    }
+
+    fn get_context() -> VMContextBuilder {
+        let mut builder = VMContextBuilder::new();
+        let sk = SecretKey::from_seed(KeyType::ED25519, signer().as_ref());
+        let pk_str = sk.public_key().to_string();
+        let pk = SdkPublicKey::from_str(&pk_str).unwrap();
+        builder.signer_account_id(signer()).signer_account_pk(pk);
+        builder
+    }
+
+    fn get_contract(context: &mut VMContextBuilder) -> PoolContract {
+        let tx_vk = std::fs::read("params/transfer_verification_key.bin").unwrap();
+        let tree_vk = std::fs::read("params/tree_verification_key.bin").unwrap();
+
+        let tx_vk = VK::deserialize(&mut &Vec::<u8>::from(tx_vk)[..])
+            .unwrap_or_else(|_| env::panic_str("Cannot deserialize vk."));
+        let tree_vk = VK::deserialize(&mut &Vec::<u8>::from(tree_vk)[..])
+            .unwrap_or_else(|_| env::panic_str("Cannot deserialize vk."));
+
+        testing_env!(context.build());
+        PoolContract::new_bin(
+            tx_vk,
+            tree_vk,
+            AccountId::new_unchecked("near".to_string()),
+            1000000000000000_u64.into(),
+        )
+    }
+
+    fn tx_proof(
+        public: TransferPub<<Bn256 as Engine>::Fr>,
+        secret: TransferSec<<Bn256 as Engine>::Fr>,
+    ) -> verifier::Proof {
+        let params_bin = std::fs::read("params/transfer_params.bin").unwrap();
+        let params = Parameters::<Bn256>::read(&mut params_bin.as_slice(), true, true).unwrap();
+
+        let circuit = |public, secret| {
+            c_transfer(&public, &secret, &*POOL_PARAMS);
+        };
+
+        let (_inputs, snark_proof) = prove(&params, &public, &secret, circuit);
+
+        let proof_bytes = snark_proof.try_to_vec().unwrap();
+        verifier::Proof::try_from_slice(&proof_bytes).unwrap()
+    }
+
+    fn tree_proof(
+        public: TreePub<<Bn256 as Engine>::Fr>,
+        secret: TreeSec<<Bn256 as Engine>::Fr>,
+    ) -> verifier::Proof {
+        let params_bin = std::fs::read("params/tree_params.bin").unwrap();
+        let params = Parameters::<Bn256>::read(&mut params_bin.as_slice(), true, true).unwrap();
+
+        let circuit = |public, secret| {
+            tree_update(&public, &secret, &*POOL_PARAMS);
+        };
+
+        let (_inputs, snark_proof) = prove(&params, &public, &secret, circuit);
+
+        let proof_bytes = snark_proof.try_to_vec().unwrap();
+        verifier::Proof::try_from_slice(&proof_bytes).unwrap()
+    }
+
+    // transact
+    #[test]
+    fn test_transact() {
+        let mut context = get_context();
+        let mut contract = get_contract(&mut context);
+        let signer = signer();
+
+        testing_env!(context.attached_deposit(2000000000000000_u128).build());
+        let lock_nonce = contract.lock(2000000000000000_u128.into());
+
+        let sk = 123.try_into().unwrap();
+        let state = State::init_test(POOL_PARAMS.clone());
+        let mut account = UserAccount::new(sk, state, POOL_PARAMS.clone());
+
+        let tx_data = account
+            .create_tx(
+                ZpTxType::Deposit {
+                    fee: BoundedNum::new(0.try_into().unwrap()),
+                    deposit_amount: BoundedNum::new(0.try_into().unwrap()),
+                    outputs: vec![],
+                },
+                None,
+                None,
+            )
+            .unwrap();
+
+        let data_to_sign = DepositDataForSigning {
+            nullifier: U256(tx_data.public.nullifier.to_uint().0 .0),
+            account_id: &signer,
+            id: lock_nonce,
+        };
+
+        let data_signer = near_crypto::InMemorySigner::from_seed(
+            signer.as_str().parse().unwrap(),
+            near_crypto::KeyType::ED25519,
+            signer.as_ref(),
+        );
+
+        let signature = data_signer
+            .sign(&data_to_sign.try_to_vec().unwrap())
+            .try_to_vec()
+            .unwrap()[1..]
+            .try_into()
+            .unwrap();
+
+        let deposit_data = DepositData {
+            address: signer.clone(),
+            id: lock_nonce,
+            signature,
+        };
+
+        let transact_proof = tx_proof(tx_data.public.clone(), tx_data.secret.clone());
+
+        let transfer_num = account.state.tree.next_index();
+        let next_commit_index = transfer_num / OUTPLUSONELOG as u64;
+        let prev_commit_index = next_commit_index.saturating_sub(1);
+
+        let root_before = account.state.tree.get_root();
+        account.state.tree.add_hash_at_height(
+            OUTPLUSONELOG as u32,
+            next_commit_index,
+            tx_data.commitment_root,
+            false,
+        );
+        let root_after = account.state.tree.get_root();
+
+        let tree_pub = TreePub {
+            root_before,
+            root_after,
+            leaf: tx_data.commitment_root,
+        };
+
+        let tree_sec = TreeSec {
+            proof_filled: account.state.tree.get_proof_unchecked(prev_commit_index),
+            proof_free: account.state.tree.get_proof_unchecked(next_commit_index),
+            prev_leaf: account
+                .state
+                .tree
+                .get(OUTPLUSONELOG as u32, prev_commit_index),
+        };
+
+        let tree_proof = tree_proof(tree_pub, tree_sec);
+
+        let tx = Tx {
+            nullifier: U256(tx_data.public.nullifier.to_uint().0 .0),
+            out_commit: U256(tx_data.public.out_commit.to_uint().0 .0),
+            token_id: "near".parse().unwrap(),
+            delta: U256(tx_data.public.delta.to_uint().0 .0),
+            transact_proof,
+            root_after: U256(root_after.to_uint().0 .0),
+            tree_proof,
+            tx_type: TxType::Deposit,
+            memo: Memo(tx_data.memo),
+            deposit_data: OptDepositData(Some(deposit_data)),
+        };
+
+        testing_env!(context.build());
+        contract.transact(tx);
+    }
+
+    // lock
+    #[test]
+    fn test_lock() {
+        let mut context = get_context();
+        let mut contract = get_contract(&mut context);
+
+        testing_env!(context.attached_deposit(1000000000000000_u128).build());
+        let lock_nonce = contract.lock(1000000000000000_u128.into());
+        assert_eq!(lock_nonce, 0);
+
+        testing_env!(context.attached_deposit(2000000000000000_u128).build());
+        let lock_nonce = contract.lock(2000000000000000_u128.into());
+        assert_eq!(lock_nonce, 1);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_lock_with_no_deposit() {
+        let mut context = get_context();
+        let mut contract = get_contract(&mut context);
+
+        contract.lock(1000000000000000_u128.into());
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_lock_with_lower_deposit() {
+        let mut context = get_context();
+        let mut contract = get_contract(&mut context);
+
+        testing_env!(context.attached_deposit(1000000000000000_u128).build());
+        contract.lock(2000000000000000_u128.into());
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_lock_with_higher_deposit() {
+        let mut context = get_context();
+        let mut contract = get_contract(&mut context);
+
+        testing_env!(context.attached_deposit(2000000000000000_u128).build());
+        contract.lock(1000000000000000_u128.into());
+    }
+
+    // release
+    #[test]
+    fn test_release() {
+        let mut context = get_context();
+        let mut contract = get_contract(&mut context);
+
+        testing_env!(context
+            .attached_deposit(1000000000000000_u128)
+            .block_timestamp(0)
+            .build());
+        let lock_nonce = contract.lock(1000000000000000_u128.into());
+        assert_eq!(lock_nonce, 0);
+
+        testing_env!(context
+            .block_timestamp(WITHDRAW_TIMEOUT_MS * 1000000 + 1000000) // To ns + 1ms
+            .build());
+        contract.release(lock_nonce);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_release_timeout() {
+        let mut context = get_context();
+        let mut contract = get_contract(&mut context);
+
+        testing_env!(context
+            .attached_deposit(1000000000000000_u128)
+            .block_timestamp(0)
+            .build());
+        let lock_nonce = contract.lock(1000000000000000_u128.into());
+        assert_eq!(lock_nonce, 0);
+
+        testing_env!(context
+            .block_timestamp(WITHDRAW_TIMEOUT_MS * 1000000 - 1000000) // To ns - 1ms
+            .build());
+        contract.release(lock_nonce);
+    }
+
+    // account_locks
+    #[test]
+    fn test_account_locks() {
+        let mut context = get_context();
+        let mut contract = get_contract(&mut context);
+
+        testing_env!(context.attached_deposit(1000000000000000_u128).build());
+        let lock_nonce = contract.lock(1000000000000000_u128.into());
+        assert_eq!(lock_nonce, 0);
+
+        testing_env!(context.build());
+        let locks = contract.account_locks(signer());
+        assert_eq!(locks.len(), 1);
+        assert_eq!(locks[0].amount, 1000000000000000_u128.into());
+    }
+}

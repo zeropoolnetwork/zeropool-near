@@ -14,7 +14,7 @@ use serde::Serialize;
 
 use crate::{num::U256, tx_decoder::DepositDataForSigning, MAX_GAS};
 
-const WITHDRAW_TIMEOUT_MS: u64 = 5 * 60 * 1000;
+pub const WITHDRAW_TIMEOUT_MS: u64 = 5 * 60 * 1000;
 
 type Nonce = u64;
 
