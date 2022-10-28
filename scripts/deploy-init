@@ -4,7 +4,7 @@ PARENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
 TX_VK="$(base64 < "$PARENT_DIR"/../params/transfer_verification_key.bin)"
 TREE_VK="$(base64 < "$PARENT_DIR"/../params/tree_verification_key.bin)"
 
-yarn build && \
+"$PARENT_DIR"/build && \
 near deploy --wasmFile "$PARENT_DIR"/../out/main.wasm \
   --initArgs "{\"tx_vk\": \"$TX_VK\", \"tree_vk\": \"$TREE_VK\", \"token_id\": \"near\", \"denominator\": \"1000000000000000\" }" \
   --accountId "$1"

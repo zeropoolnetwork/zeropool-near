@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+
+PARENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
+
+cargo build --all --target wasm32-unknown-unknown --release && cp "$PARENT_DIR"/../target/wasm32-unknown-unknown/release/*.wasm "$PARENT_DIR"/../out/main.wasm
