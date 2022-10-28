@@ -18,6 +18,7 @@ use crate::{
     tx_decoder::{parse_delta, Tx, TxType},
     verifier::{alt_bn128_groth16verify, VK},
 };
+
 mod lockup;
 mod num;
 mod tx_decoder;
@@ -282,11 +283,11 @@ impl PoolContract {
                     env::panic_str("Token amount must be negative and energy_amount must be zero.");
                 }
 
-                let deposit_data = tx.memo.deposit_data();
+                let deposit_data = tx.deposit_data.0.expect("Deposit data is missing.");
 
                 self.lockups.spend(
-                    &deposit_data.deposit_address,
-                    deposit_data.deposit_id,
+                    &deposit_data.address,
+                    deposit_data.id,
                     &deposit_data.signature(),
                     tx.nullifier,
                 );
@@ -391,7 +392,10 @@ impl PoolContract {
 
         match msg {
             Msg::Lock => {
-                self.lockups.lock(sender_id, amount.0);
+                let signer_pk = env::signer_account_pk();
+                let pk_serialized = &signer_pk.as_bytes()[1..];
+                let pk = PublicKey::from_bytes(&pk_serialized).expect("Invalid public key");
+                self.lockups.lock(sender_id, amount.0, pk);
 
                 PromiseOrValue::Value(0u128.into())
             }

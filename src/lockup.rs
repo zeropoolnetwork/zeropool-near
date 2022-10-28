@@ -2,7 +2,6 @@
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use ed25519_dalek::{PublicKey, Signature, Verifier, PUBLIC_KEY_LENGTH};
-use ff_uint::Uint;
 use near_sdk::{
     env,
     json_types::{U128, U64},
@@ -13,7 +12,7 @@ use near_sdk::{
 };
 use serde::Serialize;
 
-use crate::{num::U256, MAX_GAS};
+use crate::{num::U256, tx_decoder::DepositDataForSigning, MAX_GAS};
 
 const WITHDRAW_TIMEOUT_MS: u64 = 5 * 60 * 1000;
 
@@ -21,9 +20,9 @@ type Nonce = u64;
 
 #[derive(Serialize)]
 pub struct FullDeposit {
-    nonce: Nonce,
-    timestamp: U64,
-    amount: U128,
+    pub nonce: Nonce,
+    pub timestamp: U64,
+    pub amount: U128,
 }
 
 #[derive(BorshSerialize, BorshDeserialize)]
@@ -157,8 +156,15 @@ impl Lockups {
         if let Some(deposit) = deposits.deposits.get(&nonce).cloned() {
             let public_key =
                 PublicKey::from_bytes(&deposit.public_key).expect("Invalid public key");
+
+            let deposit_message = DepositDataForSigning {
+                nullifier,
+                account_id,
+                id: nonce,
+            };
+            let message = deposit_message.try_to_vec().unwrap();
             public_key
-                .verify(&nullifier.to_big_endian(), signature)
+                .verify(&message, signature) // TODO: nullifier + deposit_address + deposit_id
                 .expect("Invalid deposit signature");
         } else {
             env::panic_str("Lock not found");

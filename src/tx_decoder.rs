@@ -1,3 +1,5 @@
+use std::io::Write;
+
 use borsh::{BorshDeserialize, BorshSerialize};
 use ed25519_dalek::{Signature, SIGNATURE_LENGTH};
 use ff_uint::{Num, NumRepr, PrimeField};
@@ -6,6 +8,13 @@ use near_sdk::{env, AccountId};
 use crate::{num::*, verifier::Proof};
 
 const BALANCE_SIZE: usize = 8;
+
+#[derive(BorshSerialize)]
+pub struct DepositDataForSigning<'a> {
+    pub nullifier: U256,
+    pub account_id: &'a AccountId,
+    pub id: u64,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum TxType {
@@ -25,23 +34,48 @@ pub struct Tx {
     pub tree_proof: Proof,
     pub tx_type: TxType,
     pub memo: Memo,
+    pub deposit_data: OptDepositData,
 }
 
-#[derive(Debug, PartialEq, BorshSerialize, BorshDeserialize)]
-pub struct DepositData {
-    pub deposit_signature: [u8; SIGNATURE_LENGTH],
-    pub deposit_address: AccountId,
-    pub deposit_id: u64,
+// Since deposit_data is at the end of the transaction, we can save 1 byte by interpreting EOF as None.
+#[derive(Debug, PartialEq)]
+pub struct OptDepositData(pub Option<DepositData>);
+
+impl BorshSerialize for OptDepositData {
+    fn serialize<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        if let Some(deposit_data) = &self.0 {
+            deposit_data.serialize(writer)?;
+        }
+
+        Ok(())
+    }
 }
 
-impl DepositData {
-    pub fn signature(&self) -> Signature {
-        Signature::from_bytes(&self.deposit_signature).expect("Invalid signature")
+impl BorshDeserialize for OptDepositData {
+    fn deserialize(buf: &mut &[u8]) -> std::io::Result<Self> {
+        if buf.is_empty() {
+            Ok(Self(None))
+        } else {
+            Ok(Self(Some(DepositData::deserialize(buf)?)))
+        }
     }
 }
 
 #[derive(Debug, PartialEq, BorshSerialize, BorshDeserialize)]
-pub struct Memo(Vec<u8>);
+pub struct DepositData {
+    pub signature: [u8; SIGNATURE_LENGTH],
+    pub address: AccountId,
+    pub id: u64,
+}
+
+impl DepositData {
+    pub fn signature(&self) -> Signature {
+        Signature::from_bytes(&self.signature).expect("Invalid signature")
+    }
+}
+
+#[derive(Debug, PartialEq, BorshSerialize, BorshDeserialize)]
+pub struct Memo(pub Vec<u8>);
 
 impl Memo {
     #[inline]
@@ -66,34 +100,6 @@ impl Memo {
     #[inline]
     pub fn hash(&self) -> [u8; 32] {
         env::keccak256_array(&self.0)
-    }
-
-    #[inline]
-    pub fn _user_data(&self, tx_type: TxType) -> Vec<u8> {
-        let ciphertext_offset = match tx_type {
-            TxType::Deposit | TxType::Transfer => BALANCE_SIZE,
-            TxType::Withdraw => {
-                const OFFSET: usize = BALANCE_SIZE * 2;
-                let str_length =
-                    u32::from_le_bytes(self.0[OFFSET..(OFFSET + 4)].try_into().unwrap());
-                OFFSET + 4 + str_length as usize
-            }
-        };
-
-        let buf_len =
-            u32::from_le_bytes(self.0[BALANCE_SIZE..(BALANCE_SIZE + 4)].try_into().unwrap());
-
-        let full_offset = ciphertext_offset + 4 + buf_len as usize;
-        self.0[full_offset..].to_vec()
-    }
-
-    #[inline]
-    pub fn deposit_data(&self) -> DepositData {
-        let ciphertext_len =
-            u32::from_le_bytes(self.0[BALANCE_SIZE..(BALANCE_SIZE + 4)].try_into().unwrap());
-
-        let full_offset = BALANCE_SIZE + 4 + ciphertext_len as usize;
-        DepositData::try_from_slice(&self.0[full_offset..]).expect("Invalid deposit data")
     }
 }
 
