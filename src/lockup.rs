@@ -23,6 +23,7 @@ pub struct FullDeposit {
     pub nonce: Nonce,
     pub timestamp: U64,
     pub amount: U128,
+    pub public_key: [u8; PUBLIC_KEY_LENGTH],
 }
 
 #[derive(BorshSerialize, BorshDeserialize)]
@@ -63,6 +64,7 @@ impl Lockups {
                         nonce: *nonce,
                         timestamp: deposit.timestamp.into(),
                         amount: deposit.amount.into(),
+                        public_key: deposit.public_key,
                     })
                     .collect()
             })
@@ -163,15 +165,13 @@ impl Lockups {
                 id: nonce,
             };
             let message = deposit_message.try_to_vec().unwrap();
+            let message_hash = env::sha256_array(&message);
+
             public_key
-                .verify(&message, signature) // TODO: nullifier + deposit_address + deposit_id
+                .verify(&message_hash, signature)
                 .expect("Invalid deposit signature");
         } else {
             env::panic_str("Lock not found");
-        }
-
-        if deposits.deposits.is_empty() {
-            self.lockups.remove(&account_id);
         }
     }
 }

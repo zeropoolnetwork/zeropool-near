@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use ed25519_dalek::PublicKey;
-use ff_uint::{Num, PrimeField};
+use ff_uint::{Num, NumRepr, PrimeField};
 use near_sdk::{
     collections::TreeMap,
     env,
@@ -199,7 +199,7 @@ impl PoolContract {
     /// The main transaction method.
     /// Validates the transaction, handles deposits/withdrawals, pays fees to the operator.
     /// Can only be called by the current operator.
-    pub fn transact(&mut self, #[serializer(borsh)] tx: Tx) -> PromiseOrValue<U128> {
+    pub fn transact(&mut self, #[serializer(borsh)] tx: Tx) -> PromiseOrValue<()> {
         let operator_id = self.check_operator();
         let message_hash = tx.memo.hash();
         let message_hash_num = U256::from_big_endian(&message_hash).unchecked_rem(R);
@@ -212,18 +212,17 @@ impl PoolContract {
         // Verify transaction proof
         const POOL_ID: U256 = U256::ZERO;
         const DELTA_SIZE: u32 = 256;
-        let delta = tx.delta.unchecked_add(POOL_ID.unchecked_shr(DELTA_SIZE));
 
         let transact_inputs = [
             root_before,
             tx.nullifier,
             tx.out_commit,
-            delta,
+            tx.delta.unchecked_add(POOL_ID.unchecked_shr(DELTA_SIZE)),
             message_hash_num,
         ];
 
         if !alt_bn128_groth16verify(self.tx_vk.clone(), tx.transact_proof, &transact_inputs) {
-            log!("Transaction proof inputs:\nroot_before: {},\nnullifier: {},\nout_commit: {},\ndelta: {},\nmessage_hash_num: {}", root_before, tx.nullifier, tx.out_commit, delta, message_hash_num);
+            log!("Transaction proof inputs:\nroot_before: {},\nnullifier: {},\nout_commit: {},\ndelta: {},\nmessage_hash_num: {}", root_before, tx.nullifier, tx.out_commit, transact_inputs[3], message_hash_num);
             env::panic_str("Transaction proof is invalid.");
         }
 
@@ -232,12 +231,11 @@ impl PoolContract {
         }
 
         let (token_amount, energy_amount, transfer_index, _) =
-            parse_delta(Num::new(Fr::from_uint(delta).unwrap()));
-        let (token_amount, energy_amount, transfer_index) = (
-            token_amount.to_uint().0,
-            energy_amount.to_uint().0,
-            transfer_index.to_uint().0,
-        );
+            parse_delta(Num::new(Fr::from_uint(tx.delta).unwrap()));
+
+        let token_amount: i128 = token_amount.try_into().unwrap();
+        let energy_amount: i128 = energy_amount.try_into().unwrap();
+        let transfer_index = transfer_index.to_uint().0;
 
         if transfer_index > pool_index.into() {
             env::panic_str("Transfer index is greater than pool index.");
@@ -270,17 +268,27 @@ impl PoolContract {
         hashes[core::mem::size_of::<U256>()..].copy_from_slice(&message_hash);
         let new_all_messages_hash = U256::from_big_endian(&env::keccak256_array(&hashes));
 
-        let fee = tx.memo.fee();
-        let token_amount = token_amount.overflowing_add(fee).0;
+        let fee: i128 = tx
+            .memo
+            .fee()
+            .try_into()
+            .expect("fee must be positive or zero");
+        let token_amount = token_amount + fee as i128;
         let energy_amount = energy_amount;
+        let denominator: i128 = Num::<Fr>::from_uint(NumRepr(self.denominator))
+            .unwrap()
+            .try_into()
+            .unwrap();
 
-        let mut res = PromiseOrValue::Value(0u128.into());
+        let mut res = PromiseOrValue::Value(());
 
         match tx.tx_type {
             TxType::Deposit => {
                 log!("Deposit: {}", token_amount);
-                if token_amount > HALF_MAX || energy_amount != U256::ZERO {
-                    env::panic_str("Token amount must be negative and energy_amount must be zero.");
+                if token_amount < 0 || energy_amount != 0 {
+                    env::panic_str(
+                        "token_amount must be positive or 0 and energy_amount must be zero.",
+                    );
                 }
 
                 let deposit_data = tx.deposit_data.0.expect("Deposit data is missing.");
@@ -294,16 +302,17 @@ impl PoolContract {
             }
             TxType::Transfer => {
                 log!("Transfer: {}", token_amount);
-                if token_amount != U256::ZERO || energy_amount != U256::ZERO {
-                    env::panic_str("Transfer tx must have zero token and energy amount.");
+                if token_amount != 0 || energy_amount != 0 {
+                    env::panic_str("token_amount and energy_amount must be zero.");
                 }
             }
             TxType::Withdraw => {
+                if token_amount > 0 || energy_amount > 0 {
+                    env::panic_str("token_amount and energy_amount must be negative or zero.");
+                }
+
+                let withdraw_amount = -token_amount * denominator;
                 let dest = tx.memo.withdraw_address();
-                let withdraw_amount = token_amount
-                    .overflowing_neg()
-                    .0
-                    .unchecked_mul(self.denominator);
 
                 log!("Withdrawal to {}: {}", dest, withdraw_amount);
 
@@ -332,35 +341,39 @@ impl PoolContract {
             }
         }
 
-        if fee > U256::ZERO {
-            let fee = (fee.unchecked_mul(self.denominator).overflowing_neg().0)
-                .try_into()
-                .unwrap();
+        if fee > 0 {
+            let fee = fee * denominator;
 
-            if tx.token_id.as_str() == "near" {
-                res = PromiseOrValue::Promise(Promise::new(operator_id).transfer(fee));
-            } else if cfg!(not(feature = "ft")) {
-                env::panic_str("Non NEAR tokens are not supported");
+            let promise = if tx.token_id.as_str() == "near" {
+                Promise::new(operator_id).transfer(fee as u128)
+            } else if cfg!(feature = "ft") {
+                Promise::new(tx.token_id).function_call(
+                    "ft_transfer".to_string(),
+                    json!({
+                        "receiver_id": operator_id,
+                        "memo": "fee",
+                        "amount": fee,
+                    })
+                    .to_string()
+                    .as_bytes()
+                    .to_vec(),
+                    0,
+                    MAX_GAS,
+                )
             } else {
-                res = PromiseOrValue::Promise(
-                    Promise::new(tx.token_id).function_call(
-                        "ft_transfer".to_string(),
-                        json!({
-                            "receiver_id": operator_id,
-                            "memo": "fee",
-                            "amount": fee,
-                        })
-                        .to_string()
-                        .as_bytes()
-                        .to_vec(),
-                        0,
-                        MAX_GAS,
-                    ),
-                );
+                env::panic_str("Unsupported token");
+            };
+
+            match res {
+                PromiseOrValue::Promise(p) => {
+                    res = PromiseOrValue::Promise(p.then(promise));
+                }
+                PromiseOrValue::Value(_) => {
+                    res = PromiseOrValue::Promise(promise);
+                }
             }
         }
 
-        // Change contract state
         self.pool_index = pool_index;
         self.roots.insert(&pool_index, &tx.root_after);
         self.nullifiers.insert(&tx.nullifier, &hash);
