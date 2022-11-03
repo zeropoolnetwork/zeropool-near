@@ -202,10 +202,23 @@ impl PoolContract {
         let operator_id = self.check_operator();
         let message_hash = tx.memo.hash();
         let message_hash_num = U256::from_big_endian(&message_hash).unchecked_rem(R);
-        let mut pool_index: U256 = self.pool_index;
+        let pool_index: U256 = self.pool_index;
+
+        let (token_amount, energy_amount, transfer_index, _) =
+            parse_delta(Num::new(Fr::from_uint(tx.delta).unwrap()));
+
+        let transfer_index = transfer_index.to_uint().0;
+
+        if transfer_index > pool_index {
+            env::panic_str("Transfer index is out of bounds");
+        }
+
+        let token_amount: i128 = token_amount.try_into().unwrap();
+        let energy_amount: i128 = energy_amount.try_into().unwrap();
+
         let root_before = self
             .roots
-            .get(&pool_index)
+            .get(&transfer_index)
             .unwrap_or_else(|| env::panic_str("Root not found"));
 
         // Verify transaction proof
@@ -229,13 +242,6 @@ impl PoolContract {
             env::panic_str("Double spend.");
         }
 
-        let (token_amount, energy_amount, transfer_index, _) =
-            parse_delta(Num::new(Fr::from_uint(tx.delta).unwrap()));
-
-        let token_amount: i128 = token_amount.try_into().unwrap();
-        let energy_amount: i128 = energy_amount.try_into().unwrap();
-        let transfer_index = transfer_index.to_uint().0;
-
         if transfer_index > pool_index.into() {
             env::panic_str("Transfer index is greater than pool index.");
         }
@@ -257,8 +263,6 @@ impl PoolContract {
         elements[..core::mem::size_of::<U256>()].copy_from_slice(&tx.out_commit.to_little_endian());
         elements[core::mem::size_of::<U256>()..].copy_from_slice(&tx.delta.to_little_endian());
         let hash = U256::from_little_endian(&env::keccak256_array(&elements));
-
-        pool_index = U256::from(pool_index).unchecked_add(U256::from(128u8));
 
         // Calculate all_messages_hash
         let mut hashes = [0u8; core::mem::size_of::<U256>() * 2];
@@ -373,8 +377,8 @@ impl PoolContract {
             }
         }
 
-        self.pool_index = pool_index;
-        self.roots.insert(&pool_index, &tx.root_after);
+        self.pool_index = U256::from(pool_index).unchecked_add(U256::from(128u8));
+        self.roots.insert(&self.pool_index, &tx.root_after);
         self.nullifiers.insert(&tx.nullifier, &hash);
         self.all_messages_hash = new_all_messages_hash;
 
