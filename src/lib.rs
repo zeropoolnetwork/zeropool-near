@@ -13,7 +13,7 @@ use near_sdk::{
 };
 
 use crate::{
-    lockup::{FullDeposit, Lockups},
+    lockup::{FullLock, Lockups},
     num::*,
     tx_decoder::{parse_delta, Tx, TxType},
     verifier::{alt_bn128_groth16verify, VK},
@@ -31,7 +31,6 @@ const FIRST_ROOT: U256 = U256::from_const_str(
 const R: U256 = U256::from_const_str(
     "21888242871839275222246405745257275088548364400416034343698204186575808495617",
 );
-const HALF_MAX: U256 = U256([u64::MAX, u64::MAX, 0, 0]);
 
 #[near_bindgen]
 #[derive(PanicOnDefault, BorshDeserialize, BorshSerialize)]
@@ -180,8 +179,8 @@ impl PoolContract {
     /// ```json
     /// [{ nonce: 123, amount: "123", timestamp: "123" }, ...]
     /// ```
-    pub fn account_locks(&self, account_id: AccountId) -> Vec<FullDeposit> {
-        self.lockups.account_deposits(account_id)
+    pub fn account_locks(&self, account_id: AccountId) -> Vec<FullLock> {
+        self.lockups.account_locks(account_id)
     }
 
     /// Return the index of the next transaction.
@@ -419,7 +418,7 @@ impl PoolContract {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use libzeropool_rs::{
-        client::{state::State, TxType as ZpTxType, UserAccount},
+        client::{state::State, TransactionData, TxType as ZpTxType, UserAccount},
         libzeropool::{
             circuit::{tree::tree_update, tx::c_transfer},
             constants::*,
@@ -429,12 +428,15 @@ mod tests {
                 Parameters,
             },
             native::{
+                account::Account,
                 boundednum::BoundedNum,
+                params::PoolBN256,
                 tree::{TreePub, TreeSec},
                 tx::{TransferPub, TransferSec},
             },
             POOL_PARAMS,
         },
+        store::MemoryDatabase,
     };
     use near_crypto::{KeyType, SecretKey, Signer};
     use near_sdk::{
@@ -447,6 +449,8 @@ mod tests {
         lockup::WITHDRAW_TIMEOUT_MS,
         tx_decoder::{DepositData, DepositDataForSigning, Memo, OptDepositData},
     };
+
+    const DENOMINATOR: u128 = 1_000_000_000_000_000;
 
     fn signer() -> AccountId {
         accounts(0)
@@ -475,7 +479,7 @@ mod tests {
             tx_vk,
             tree_vk,
             AccountId::new_unchecked("near".to_string()),
-            1000000000000000_u64.into(),
+            DENOMINATOR.into(),
         )
     }
 

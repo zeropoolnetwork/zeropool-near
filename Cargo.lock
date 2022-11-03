@@ -1000,9 +1000,9 @@ dependencies = [
 
 [[package]]
 name = "libzeropool-rs"
-version = "0.8.0"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "98076a1a2afb085b19cebd7ae79d1ebb79ba51d726f7c2883fc90f288e7d2536"
+checksum = "6123572a1084258dffa0384538ad9e320c2fc94ad66fcddad3a35cf3bcde11fe"
 dependencies = [
  "base64 0.13.1",
  "borsh",
