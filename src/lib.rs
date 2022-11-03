@@ -521,59 +521,71 @@ mod tests {
         verifier::Proof::try_from_slice(&proof_bytes).unwrap()
     }
 
-    // transact
-    #[test]
-    fn test_transact() {
-        let mut context = get_context();
-        let mut contract = get_contract(&mut context);
+    fn create_tx(
+        native_tx_type: ZpTxType<<Bn256 as Engine>::Fr>,
+        account: &mut UserAccount<MemoryDatabase, PoolBN256>,
+        context: &mut VMContextBuilder,
+        contract: &mut PoolContract,
+    ) -> Tx {
         let signer = signer();
 
-        testing_env!(context.attached_deposit(2000000000000000_u128).build());
-        let lock_nonce = contract.lock(2000000000000000_u128.into());
-
-        let sk = 123.try_into().unwrap();
-        let state = State::init_test(POOL_PARAMS.clone());
-        let mut account = UserAccount::new(sk, state, POOL_PARAMS.clone());
-
         let tx_data = account
-            .create_tx(
-                ZpTxType::Deposit {
-                    fee: BoundedNum::new(0.try_into().unwrap()),
-                    deposit_amount: BoundedNum::new(0.try_into().unwrap()),
-                    outputs: vec![],
-                },
-                None,
-                None,
-            )
+            .create_tx(native_tx_type.clone(), None, None)
             .unwrap();
 
-        let data_to_sign = DepositDataForSigning {
-            nullifier: U256(tx_data.public.nullifier.to_uint().0 .0),
-            account_id: &signer,
-            id: lock_nonce,
+        let (tx_value, _, tx_index, _) = parse_delta(Num::new(
+            Fr::from_uint(U256(tx_data.public.delta.to_uint().0 .0)).unwrap(),
+        ));
+        let tx_index = tx_index.try_into().unwrap();
+
+        let v: i64 = tx_value.try_into().unwrap();
+        println!("!!!!!! v: {}", v);
+
+        let tx_type = match &native_tx_type {
+            ZpTxType::Deposit { .. } => TxType::Deposit,
+            ZpTxType::Withdraw { .. } => TxType::Withdraw,
+            ZpTxType::Transfer { .. } => TxType::Transfer,
+            _ => panic!("Invalid tx type"),
         };
 
-        let data_signer = near_crypto::InMemorySigner::from_seed(
-            signer.as_str().parse().unwrap(),
-            near_crypto::KeyType::ED25519,
-            signer.as_ref(),
-        );
+        let deposit_data = if let ZpTxType::Deposit { deposit_amount, .. } = &native_tx_type {
+            let deposit_amount: u64 = deposit_amount.to_num().try_into().unwrap();
+            let deposit_amount = deposit_amount as u128 * DENOMINATOR;
 
-        let signature = data_signer
-            .sign(&data_to_sign.try_to_vec().unwrap())
-            .try_to_vec()
-            .unwrap()[1..]
-            .try_into()
-            .unwrap();
+            testing_env!(context.attached_deposit(deposit_amount).build());
+            let lock_nonce = contract.lock(deposit_amount.into());
 
-        let deposit_data = DepositData {
-            address: signer.clone(),
-            id: lock_nonce,
-            signature,
+            let signature = {
+                let data_to_sign = DepositDataForSigning {
+                    nullifier: U256(tx_data.public.nullifier.to_uint().0 .0),
+                    account_id: &signer,
+                    id: lock_nonce,
+                };
+
+                let bytes_to_sign = data_to_sign.try_to_vec().unwrap();
+                let hash = env::sha256_array(&bytes_to_sign);
+
+                let data_signer = near_crypto::InMemorySigner::from_seed(
+                    signer.as_str().parse().unwrap(),
+                    near_crypto::KeyType::ED25519,
+                    signer.as_ref(),
+                );
+
+                data_signer.sign(&hash).try_to_vec().unwrap()[1..]
+                    .try_into()
+                    .unwrap()
+            };
+
+            Some(DepositData {
+                address: signer.clone(),
+                id: lock_nonce,
+                signature,
+            })
+        } else {
+            None
         };
 
         let transact_proof = tx_proof(tx_data.public.clone(), tx_data.secret.clone());
-
         let transfer_num = account.state.tree.next_index();
         let next_commit_index = transfer_num / OUTPLUSONELOG as u64;
         let prev_commit_index = next_commit_index.saturating_sub(1);
@@ -612,13 +624,93 @@ mod tests {
             transact_proof,
             root_after: U256(root_after.to_uint().0 .0),
             tree_proof,
-            tx_type: TxType::Deposit,
+            tx_type,
             memo: Memo(tx_data.memo),
-            deposit_data: OptDepositData(Some(deposit_data)),
+            deposit_data: OptDepositData(deposit_data),
         };
 
-        testing_env!(context.build());
-        contract.transact(tx);
+        let acc = tx_data.secret.tx.output.0;
+        let out_notes = tx_data
+            .secret
+            .tx
+            .output
+            .1
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (tx_index + i as u64, *n))
+            .collect::<Vec<_>>();
+
+        println!("!!!!!! tx_index: {}", tx_index);
+        println!("!!!!!! acc: {:?}", &acc);
+        println!("!!!!!! out_notes: {:?}", &out_notes);
+
+        account.state.add_full_tx(
+            tx_index,
+            tx_data.out_hashes.as_slice(),
+            Some(acc),
+            &out_notes,
+        );
+
+        println!("root_before: {}", &root_before);
+        println!("root_after: {}", &root_after);
+        println!("nullifier: {}", &tx.nullifier);
+        println!("out_commit: {}", &tx_data.public.out_commit);
+        println!("delta: {}", &tx_data.public.delta);
+
+        tx
+    }
+
+    // transact: deposit + transfer + withdraw
+    #[cfg(feature = "heavy_tests")]
+    #[test]
+    fn test_transact() {
+        let mut context = get_context();
+        let mut contract = get_contract(&mut context);
+        let signer = signer();
+
+        let sk = 123.try_into().unwrap();
+        let state = State::init_test(POOL_PARAMS.clone());
+        let mut account = UserAccount::new(sk, state, POOL_PARAMS.clone());
+
+        assert_eq!(contract.pool_index(), U256::from(0));
+        // deposit
+        {
+            let deposit = create_tx(
+                ZpTxType::Deposit {
+                    fee: BoundedNum::new(0.try_into().unwrap()),
+                    deposit_amount: BoundedNum::new(3.try_into().unwrap()),
+                    outputs: vec![],
+                },
+                &mut account,
+                &mut context,
+                &mut contract,
+            );
+
+            testing_env!(context.build());
+            contract.transact(deposit);
+        }
+        assert_eq!(contract.pool_index(), U256::from(128));
+
+        // // withdraw
+        // {
+        //     let to = signer.try_to_vec().unwrap();
+        //     let withdraw = create_tx(
+        //         ZpTxType::Withdraw {
+        //             fee: BoundedNum::new(0.try_into().unwrap()),
+        //             withdraw_amount: BoundedNum::new(3.try_into().unwrap()),
+        //             to,
+        //             native_amount: BoundedNum::new(3.try_into().unwrap()),
+        //             energy_amount: BoundedNum::new(0.try_into().unwrap()),
+        //         },
+        //         &mut account,
+        //         &mut context,
+        //         &mut contract,
+        //     );
+        //
+        //     testing_env!(context.build());
+        //     assert_eq!(contract.pool_index(), U256::from(128));
+        //     contract.transact(withdraw);
+        // }
     }
 
     // lock
