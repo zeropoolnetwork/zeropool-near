@@ -202,14 +202,13 @@ impl PoolContract {
         let operator_id = self.check_operator();
         let message_hash = tx.memo.hash();
         let message_hash_num = U256::from_big_endian(&message_hash).unchecked_rem(R);
-        let pool_index: U256 = self.pool_index;
 
         let (token_amount, energy_amount, transfer_index, _) =
             parse_delta(Num::new(Fr::from_uint(tx.delta).unwrap()));
 
         let transfer_index = transfer_index.to_uint().0;
 
-        if transfer_index > pool_index {
+        if transfer_index > self.pool_index {
             env::panic_str("Transfer index is out of bounds");
         }
 
@@ -242,12 +241,16 @@ impl PoolContract {
             env::panic_str("Double spend.");
         }
 
-        if transfer_index > pool_index.into() {
+        if transfer_index > self.pool_index {
             env::panic_str("Transfer index is greater than pool index.");
         }
 
         // Verify tree proof
-        let tree_inputs = [root_before, tx.root_after, tx.out_commit];
+        let pool_root = self
+            .roots
+            .get(&self.pool_index)
+            .unwrap_or_else(|| env::panic_str("Root not found"));
+        let tree_inputs = [pool_root, tx.root_after, tx.out_commit];
         if !alt_bn128_groth16verify(self.tree_vk.clone(), tx.tree_proof, &tree_inputs) {
             log!(
                 "Tree proof inputs:\nroot_before: {},\nroot_after: {},\nout_commit: {}",
@@ -377,7 +380,7 @@ impl PoolContract {
             }
         }
 
-        self.pool_index = U256::from(pool_index).unchecked_add(U256::from(128u8));
+        self.pool_index = U256::from(self.pool_index).unchecked_add(U256::from(128u8));
         self.roots.insert(&self.pool_index, &tx.root_after);
         self.nullifiers.insert(&tx.nullifier, &hash);
         self.all_messages_hash = new_all_messages_hash;
