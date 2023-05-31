@@ -45,7 +45,7 @@ pub struct PoolContract {
     pool_index: U256,
     /// Merkle roots. "transaction index" => "merkle root"
     roots: TreeMap<U256, U256>,
-    /// Nullifiers for used accounts. "transaction index" => "nullifier".
+    /// Nullifiers for used accounts. "nullifier" => "keccak256(out_commit + delta)".
     nullifiers: TreeMap<U256, U256>,
     /// Accumulative transaction hash
     all_messages_hash: U256,
@@ -253,8 +253,8 @@ impl PoolContract {
         let tree_inputs = [pool_root, tx.root_after, tx.out_commit];
         if !alt_bn128_groth16verify(self.tree_vk.clone(), tx.tree_proof, &tree_inputs) {
             log!(
-                "Tree proof inputs:\nroot_before: {},\nroot_after: {},\nout_commit: {}",
-                root_before,
+                "Tree proof inputs:\npool_root: {},\nroot_after: {},\nout_commit: {}",
+                pool_root,
                 tx.root_after,
                 tx.out_commit
             );
