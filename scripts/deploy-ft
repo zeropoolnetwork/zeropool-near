@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+
+git clone https://github.com/near-examples/FT.git &&
+cd FT &&
+./scripts/build.sh --features ft &&
+near dev-deploy --wasmFile res/fungible_token.wasm &&
+source neardev/dev-account.env &&
+near call $CONTRACT_NAME new '{"owner_id": "'$CONTRACT_NAME'", "total_supply": "1000000000000000", "metadata": { "spec": "ft-1.0.0", "name": "ZeroPool Test Token", "symbol": "ZPTS", "decimals": 8 }}' --accountId $CONTRACT_NAME

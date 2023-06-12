@@ -11,6 +11,7 @@ use near_sdk::{
     serde_json::json,
     AccountId, Gas, PanicOnDefault, Promise, PromiseOrValue,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::{
     lockup::{FullLock, Lockups},
@@ -78,6 +79,8 @@ impl PoolContract {
 
         if token_id.as_str() != "near" && cfg!(not(feature = "ft")) {
             env::panic_str("Non NEAR tokens are not supported");
+        } else if cfg!(feature = "ft") && token_id.as_str() == "near" {
+            env::panic_str("Expected a token account ID, got 'near'. The contract is compiled with the 'ft' feature, so it expects a token account ID.");
         }
 
         let mut roots = TreeMap::new("roots".as_bytes());
@@ -324,10 +327,12 @@ impl PoolContract {
 
                 let withdraw_amount = withdraw_amount.try_into().unwrap();
 
-                if tx.token_id.as_str() == "near" {
+                if cfg!(not(feature = "ft")) {
+                    if tx.token_id.as_str() != "near" {
+                        env::panic_str("Only NEAR withdrawals are supported.");
+                    }
+
                     res = PromiseOrValue::Promise(Promise::new(dest).transfer(withdraw_amount));
-                } else if cfg!(not(feature = "ft")) {
-                    env::panic_str("Non NEAR tokens are not supported");
                 } else {
                     res = PromiseOrValue::Promise(
                         Promise::new(tx.token_id.clone()).function_call(
@@ -350,7 +355,11 @@ impl PoolContract {
         if fee > 0 {
             let fee = fee * denominator;
 
-            let promise = if tx.token_id.as_str() == "near" {
+            let promise = if cfg!(not(feature = "ft")) {
+                if tx.token_id.as_str() != "near" {
+                    env::panic_str("Only NEAR withdrawals are supported.");
+                }
+
                 Promise::new(operator_id).transfer(fee as u128)
             } else if cfg!(feature = "ft") {
                 Promise::new(tx.token_id).function_call(
@@ -390,6 +399,7 @@ impl PoolContract {
 
     #[cfg(feature = "ft")]
     /// Support for FT version of `lock`.
+    /// Used with ft_transfer_call.
     pub fn ft_on_transfer(
         &mut self,
         sender_id: AccountId,
