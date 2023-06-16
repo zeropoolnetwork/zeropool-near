@@ -25,7 +25,7 @@ mod num;
 mod tx_decoder;
 mod verifier;
 
-pub const MAX_GAS: Gas = Gas(300_000_000_000_000);
+pub const FT_TRANSFER_GAS: Gas = Gas(10_000_000_000_000);
 const FIRST_ROOT: U256 = U256::from_const_str(
     "11469701942666298368112882412133877458305516134926649826543144744382391691533",
 );
@@ -339,13 +339,13 @@ impl PoolContract {
                             "ft_transfer".to_string(),
                             json!({
                                 "receiver_id": dest,
-                                "amount": withdraw_amount,
+                                "amount": withdraw_amount.to_string(),
                                 "memo": "withdraw",
                             })
                             .to_string()
                             .into_bytes(),
-                            0,
-                            MAX_GAS,
+                            1,
+                            FT_TRANSFER_GAS,
                         ),
                     );
                 }
@@ -372,8 +372,8 @@ impl PoolContract {
                     .to_string()
                     .as_bytes()
                     .to_vec(),
-                    0,
-                    MAX_GAS,
+                    1,
+                    FT_TRANSFER_GAS,
                 )
             } else {
                 env::panic_str("Unsupported token");

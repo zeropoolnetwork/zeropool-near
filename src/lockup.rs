@@ -12,7 +12,7 @@ use near_sdk::{
 };
 use serde::Serialize;
 
-use crate::{num::U256, tx_decoder::DepositDataForSigning, MAX_GAS};
+use crate::{num::U256, tx_decoder::DepositDataForSigning, FT_TRANSFER_GAS};
 
 pub const WITHDRAW_TIMEOUT_MS: u64 = 5 * 60 * 1000;
 
@@ -135,8 +135,8 @@ impl Lockups {
                 .to_string()
                 .as_bytes()
                 .to_vec(),
-                0,
-                MAX_GAS, // FIXME: How much gas should we use?
+                1,
+                FT_TRANSFER_GAS, // FIXME: How much gas should we use?
             )
         }
     }
