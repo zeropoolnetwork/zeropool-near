@@ -27,6 +27,7 @@ pub enum TxType {
 pub struct Tx {
     pub nullifier: U256,
     pub out_commit: U256,
+    // TODO: Remove token_id
     pub token_id: AccountId,
     pub delta: U256,
     pub transact_proof: Proof,

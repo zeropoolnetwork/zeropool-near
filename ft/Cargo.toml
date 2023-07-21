@@ -1,0 +1,21 @@
+[package]
+name = "zeropool-near-ft"
+version = "1.0.0"
+authors = ["Near Inc <hello@nearprotocol.com>", "Dmitry Vdovin <voidxnull@gmail.com>"]
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[profile.release]
+codegen-units = 1
+opt-level = "z"
+lto = true
+debug = false
+panic = "abort"
+overflow-checks = true
+
+[dependencies]
+near-sdk = { git = "https://github.com/zeropoolnetwork/near-sdk-rs", branch = "feature/alt_bn128_new", features = ["unstable"] }
+near-contract-standards = { git = "https://github.com/zeropoolnetwork/near-sdk-rs", branch = "feature/alt_bn128_new" }
+zeropool-near = { path = ".." }

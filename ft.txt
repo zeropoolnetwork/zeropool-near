@@ -1,0 +1,12 @@
+Starting deployment. Account id: dev-1686589568661-43655342590399, node: https://rpc.testnet.near.org, helper: https://helper.testnet.near.org, file: res/fungible_token.wasm
+Transaction Id 4rnkbJTnAfTw7k1pmYLDoqLST7hWxe7ShGPXouiZ4E7E
+To see the transaction in the transaction explorer, please open this url in your browser
+https://explorer.testnet.near.org/transactions/4rnkbJTnAfTw7k1pmYLDoqLST7hWxe7ShGPXouiZ4E7E
+Done deploying to dev-1686589568661-43655342590399
+Scheduling a call: dev-1686589568661-43655342590399.new({"owner_id": "dev-1686589568661-43655342590399", "total_supply": "1000000000000000", "metadata": { "spec": "ft-1.0.0", "name": "ZeroPool Test Token", "symbol": "ZPTS", "decimals": 8 }})
+Doing account.functionCall()
+Receipt: 4Qy4HtUhnZaPyaB17Xumqa8ehHep9jK2vbBNpuRejkCm
+        Log [dev-1686589568661-43655342590399]: EVENT_JSON:{"standard":"nep141","version":"1.0.0","event":"ft_mint","data":[{"owner_id":"dev-1686589568661-43655342590399","amount":"1000000000000000","memo":"Initial tokens supply is minted"}]}
+Transaction Id EWMWJZhp2so4K4yW9WaKCbL6YrJZLocgHkC4mcDCDCvD
+To see the transaction in the transaction explorer, please open this url in your browser
+https://explorer.testnet.near.org/transactions/EWMWJZhp2so4K4yW9WaKCbL6YrJZLocgHkC4mcDCDCvD

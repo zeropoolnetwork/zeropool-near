@@ -1,22 +1,20 @@
-//! Primitive lockups for the pool.
-
 use borsh::{BorshDeserialize, BorshSerialize};
-use ed25519_dalek::{PublicKey, Signature, Verifier, PUBLIC_KEY_LENGTH};
+use ed25519_dalek::{PublicKey as PublicKeyEd25519, Signature, Verifier, PUBLIC_KEY_LENGTH};
 use near_sdk::{
-    env,
+    env, ext_contract,
     json_types::{U128, U64},
     log, require,
-    serde_json::json,
     store::{LookupMap, TreeMap},
-    AccountId, Promise,
+    AccountId, Balance, PublicKey,
 };
 use serde::Serialize;
 
-use crate::{num::U256, tx_decoder::DepositDataForSigning, FT_TRANSFER_GAS};
-
-pub const WITHDRAW_TIMEOUT_MS: u64 = 5 * 60 * 1000;
+use crate::{num::U256, tx_decoder::DepositDataForSigning};
 
 type Nonce = u64;
+
+pub const WITHDRAW_TIMEOUT_MS: u64 = 5 * 60 * 1000;
+pub const SPEND_TIMEOUT_MS: u64 = 5 * 60 * 1000;
 
 #[derive(Serialize)]
 pub struct FullLock {
@@ -27,29 +25,27 @@ pub struct FullLock {
 }
 
 #[derive(Debug, BorshSerialize, BorshDeserialize)]
-struct Locks {
-    nonce: Nonce,
-    locks: TreeMap<Nonce, Lock>,
+pub struct Locks {
+    pub nonce: Nonce,
+    pub locks: TreeMap<Nonce, Lock>,
 }
 
 #[derive(Debug, Clone, BorshSerialize, BorshDeserialize)]
-struct Lock {
-    timestamp: u64,
-    amount: u128,
-    public_key: [u8; PUBLIC_KEY_LENGTH],
+pub struct Lock {
+    pub timestamp: u64,
+    pub amount: Balance,
+    pub public_key: [u8; PUBLIC_KEY_LENGTH],
 }
 
 #[derive(BorshSerialize, BorshDeserialize)]
-pub struct Lockups {
-    lockups: LookupMap<AccountId, Locks>,
-    pub(crate) token_id: AccountId,
+pub struct ZeropoolLockups {
+    pub lockups: LookupMap<AccountId, Locks>,
 }
 
-impl Lockups {
-    pub fn new(token_id: AccountId) -> Self {
+impl ZeropoolLockups {
+    pub fn new() -> Self {
         Self {
             lockups: LookupMap::new("lockups".as_bytes()),
-            token_id,
         }
     }
 
@@ -71,7 +67,10 @@ impl Lockups {
             .unwrap_or_default()
     }
 
-    pub fn lock(&mut self, account_id: AccountId, amount: u128, public_key: PublicKey) -> u64 {
+    pub fn lock(&mut self, account_id: AccountId, amount: Balance, public_key: PublicKey) -> u64 {
+        let pk_serialized = &public_key.as_bytes()[1..];
+        let public_key = PublicKeyEd25519::from_bytes(&pk_serialized).expect("Invalid public key");
+
         let timestamp = env::block_timestamp_ms();
 
         let locks = self.lockups.entry(account_id.clone()).or_insert_with(|| {
@@ -98,7 +97,7 @@ impl Lockups {
         nonce
     }
 
-    pub fn release(&mut self, account_id: AccountId, nonce: u64) -> Promise {
+    pub fn release(&mut self, account_id: AccountId, nonce: u64) -> Lock {
         let locks: &mut Locks = self
             .lockups
             .get_mut(&account_id)
@@ -122,23 +121,7 @@ impl Lockups {
             self.lockups.remove(&account_id);
         }
 
-        if self.token_id.as_str() == "near" {
-            Promise::new(account_id).transfer(lock.amount.into())
-        } else {
-            Promise::new(account_id).function_call(
-                "ft_transfer".into(),
-                json!({
-                    "amount": lock.amount,
-                    "memo": "withdraw",
-                    "sender_id": env::predecessor_account_id(),
-                })
-                .to_string()
-                .as_bytes()
-                .to_vec(),
-                1,
-                FT_TRANSFER_GAS, // FIXME: How much gas should we use?
-            )
-        }
+        lock
     }
 
     pub fn spend(
@@ -156,7 +139,8 @@ impl Lockups {
             .expect("Account has no deposits");
 
         if let Some(lock) = locks.locks.get(&nonce).cloned() {
-            let public_key = PublicKey::from_bytes(&lock.public_key).expect("Invalid public key");
+            let public_key =
+                PublicKeyEd25519::from_bytes(&lock.public_key).expect("Invalid public key");
 
             let lock_message = DepositDataForSigning {
                 nullifier,
@@ -170,10 +154,83 @@ impl Lockups {
                 .verify(&message_hash, signature)
                 .expect("Invalid deposit signature");
 
+            let timestamp = env::block_timestamp_ms();
+            let elapsed = timestamp - lock.timestamp;
+
+            require!(elapsed < SPEND_TIMEOUT_MS, "Lock is expired");
+
             locks.locks.remove(&nonce);
         } else {
             log!("Existing locks: {:?}", &locks);
             env::panic_str("Lock not found");
         }
     }
+}
+
+#[ext_contract(ext_zeropool_lockups)]
+pub trait ZeropoolLockupMethods {
+    /// Can be called by a client to reserve a certain amount for use in the `transact`
+    /// method. Returns the lockup ID.
+    fn lock(&mut self, amount: u128) -> u64;
+    /// Release the funds previously reserved with the `lock` method.
+    fn release(&mut self, lock_id: u64);
+    /// Get all locks for the specified account in JSON format.
+    /// ```json
+    /// [{ nonce: 123, amount: "123", timestamp: "123" }, ...]
+    /// ```
+    fn account_locks(&self) -> Vec<FullLock>;
+}
+
+#[macro_export]
+macro_rules! impl_zeropool_lockups {
+    ($contract:ident, $($locks:ident).+, $token:ident) => {
+        use $crate::ZeropoolLockupMethods;
+
+        #[near_bindgen]
+        impl ZeropoolLockupMethods for $contract {
+            fn lock(&mut self, amount: u128) -> u64 {
+                let account_id = env::signer_account_id();
+                let public_key = env::signer_account_pk();
+
+                let balance = self.$token.internal_unwrap_balance_of(&account_id);
+                if let Some(new_balance) = balance.checked_sub(amount) {
+                    self.$token.accounts.insert(&account_id, &new_balance);
+                } else {
+                    env::panic_str("The account doesn't have enough balance");
+                }
+
+                let nonce = self.$($locks).+.lock(account_id.clone(), amount, public_key);
+
+                log!(
+                    "Locked {} tokens for {} (lock {})",
+                    amount,
+                    account_id,
+                    nonce
+                );
+
+                nonce
+            }
+
+            fn release(&mut self, lock_id: u64) {
+                let account_id = env::signer_account_id();
+                let lock = self.$($locks).+.release(account_id.clone(), lock_id);
+                let balance = self.$token.internal_unwrap_balance_of(&account_id);
+                let new_balance = balance + lock.amount;
+
+                self.$token.accounts.insert(&account_id, &new_balance);
+
+                log!(
+                    "Released {} tokens for {} (lock {})",
+                    lock.amount,
+                    account_id,
+                    lock_id
+                );
+            }
+
+            fn account_locks(&self) -> Vec<$crate::FullLock> {
+                let account_id = env::predecessor_account_id();
+                self.$($locks).+.account_locks(account_id)
+            }
+        }
+    };
 }

@@ -2273,7 +2273,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "zeropool-near-pool"
+name = "zeropool-near"
 version = "1.0.0"
 dependencies = [
  "borsh",
@@ -2288,4 +2288,13 @@ dependencies = [
  "num-traits",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "zeropool-near-ft"
+version = "1.0.0"
+dependencies = [
+ "near-contract-standards",
+ "near-sdk",
+ "zeropool-near",
 ]
