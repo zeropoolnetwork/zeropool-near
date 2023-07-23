@@ -1,4 +1,31 @@
-# ZeroPool smart contract for Near
+# ZeroPool privacy pool for NEAR
+
+## Overview
+`zeropool-near` provides a way to add support for private transactions to any NEAR FT contract.
+
+## Usage
+1. Add `ZeropoolState` structure to your contract:
+    ```rust
+    #[near_bindgen]
+    #[derive(BorshDeserialize, BorshSerialize)]
+    pub struct Contract {
+        //...
+        pool: ZeropoolState,
+        //...
+    }
+    ```
+2. Construct `ZeropoolState` in your contract's `new` method.:
+    ```rust
+    let pool = ZeropoolState::new(tx_vk, tree_vk, denominator);
+    ```
+   * tx_vk and tree_vk are verification keys for the transaction and the merkle tree respectively. See https://github.com/zeropoolnetwork/zeropool-test-params for testing keys/params and more info.
+3. Implement ZeroPool methods with the impl_zeropool macro:
+    ```rust
+    zeropool_near::impl_zeropool!(Contract, pool, token);
+    ```
+
+See an example FT implementation in `ft/`.
+
 
 ## Deploy dev contract
 Run this command to deploy a basic FT contract with support for lockups and zeropool methods:
