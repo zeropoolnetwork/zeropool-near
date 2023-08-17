@@ -26,7 +26,6 @@ mod tx_decoder;
 mod verifier;
 
 pub const FT_TRANSFER_GAS: Gas = Gas(10_000_000_000_000);
-pub const XCC_GAS: Gas = Gas(10_000_000_000_000);
 const FIRST_ROOT: U256 = U256::from_const_str(
     "11469701942666298368112882412133877458305516134926649826543144744382391691533",
 );
@@ -390,40 +389,12 @@ impl PoolContract {
             }
         }
 
-        let res = match res {
-            PromiseOrValue::Promise(p) => PromiseOrValue::Promise(
-                p.then(
-                    Self::ext(env::current_account_id())
-                        .with_static_gas(XCC_GAS)
-                        .callback_finalize(
-                            tx.root_after,
-                            tx.nullifier,
-                            hash,
-                            new_all_messages_hash,
-                        ),
-                ),
-            ),
-            PromiseOrValue::Value(_) => PromiseOrValue::Value(()),
-        };
+        self.pool_index = U256::from(self.pool_index).unchecked_add(U256::from(128u8));
+        self.roots.insert(&self.pool_index, &tx.root_after);
+        self.nullifiers.insert(&tx.nullifier, &hash);
+        self.all_messages_hash = new_all_messages_hash;
 
         res
-    }
-
-    #[private]
-    pub fn callback_finalize(
-        &mut self,
-        #[callback_result] b: Result<(), near_sdk::PromiseError>,
-        #[serializer(borsh)] root_after: U256,
-        #[serializer(borsh)] nullifier: U256,
-        #[serializer(borsh)] hash: U256,
-        #[serializer(borsh)] new_all_messages_hash: U256,
-    ) {
-        b.unwrap_or_else(|_| env::panic_str("Promise failed"));
-
-        self.pool_index = U256::from(self.pool_index).unchecked_add(U256::from(128u8));
-        self.roots.insert(&self.pool_index, &root_after);
-        self.nullifiers.insert(&nullifier, &hash);
-        self.all_messages_hash = new_all_messages_hash;
     }
 
     #[cfg(feature = "ft")]
