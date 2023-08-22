@@ -11,19 +11,20 @@ use near_sdk::{
     serde_json::json,
     AccountId, Gas, PanicOnDefault, Promise, PromiseOrValue,
 };
-use serde::{Deserialize, Serialize};
 
 use crate::{
     lockup::{FullLock, Lockups},
     num::*,
     tx_decoder::{parse_delta, Tx, TxType},
     verifier::{alt_bn128_groth16verify, VK},
+    withdraw::Withdraws,
 };
 
 mod lockup;
 mod num;
 mod tx_decoder;
 mod verifier;
+mod withdraw;
 
 pub const FT_TRANSFER_GAS: Gas = Gas(10_000_000_000_000);
 const FIRST_ROOT: U256 = U256::from_const_str(
@@ -54,6 +55,7 @@ pub struct PoolContract {
     /// Temporary deposits: simulation of ethereum's allowance system.
     // TODO: Allow multiple deposits per user
     lockups: Lockups,
+    withdraws: Withdraws,
 }
 
 impl PoolContract {
@@ -97,7 +99,8 @@ impl PoolContract {
             nullifiers: TreeMap::new("nullifiers".as_bytes()),
             all_messages_hash: U256::ZERO,
             denominator,
-            lockups: Lockups::new(token_id),
+            lockups: Lockups::new(token_id.clone()),
+            withdraws: Withdraws::new(token_id),
         }
     }
 
@@ -138,7 +141,8 @@ impl PoolContract {
             nullifiers: TreeMap::new("nullifiers".as_bytes()),
             all_messages_hash: U256::ZERO,
             denominator,
-            lockups: Lockups::new(token_id),
+            lockups: Lockups::new(token_id.clone()),
+            withdraws: Withdraws::new(token_id),
         }
     }
 
@@ -176,6 +180,10 @@ impl PoolContract {
     pub fn release(&mut self, id: u64) -> Promise {
         let signer = env::signer_account_id();
         self.lockups.release(signer, id)
+    }
+
+    pub fn withdraw(&mut self, account_id: AccountId) -> Promise {
+        self.withdraws.execute(account_id)
     }
 
     /// Get all locks for the specified account in JSON format.
@@ -289,8 +297,6 @@ impl PoolContract {
             .try_into()
             .unwrap();
 
-        let mut res = PromiseOrValue::Value(());
-
         match tx.tx_type {
             TxType::Deposit => {
                 log!("Deposit: {}", token_amount);
@@ -316,42 +322,27 @@ impl PoolContract {
                 }
             }
             TxType::Withdraw => {
+                let dest = tx.memo.withdraw_address();
+
+                if self.withdraws.exists(&dest) {
+                    env::panic_str("Already has unexecuted withdraw");
+                }
+
                 if token_amount > 0 || energy_amount > 0 {
                     env::panic_str("token_amount and energy_amount must be negative or zero.");
                 }
 
                 let withdraw_amount = -token_amount * denominator;
-                let dest = tx.memo.withdraw_address();
 
                 log!("Withdrawal to {}: {}", dest, withdraw_amount);
 
                 let withdraw_amount = withdraw_amount.try_into().unwrap();
 
-                if cfg!(not(feature = "ft")) {
-                    if tx.token_id.as_str() != "near" {
-                        env::panic_str("Only NEAR withdrawals are supported.");
-                    }
-
-                    res = PromiseOrValue::Promise(Promise::new(dest).transfer(withdraw_amount));
-                } else {
-                    res = PromiseOrValue::Promise(
-                        Promise::new(tx.token_id.clone()).function_call(
-                            "ft_transfer".to_string(),
-                            json!({
-                                "receiver_id": dest,
-                                "amount": withdraw_amount.to_string(),
-                                "memo": "withdraw",
-                            })
-                            .to_string()
-                            .into_bytes(),
-                            1,
-                            FT_TRANSFER_GAS,
-                        ),
-                    );
-                }
+                self.withdraws.insert(dest.clone(), withdraw_amount);
             }
         }
 
+        let mut res = PromiseOrValue::Value(());
         if fee > 0 {
             let fee = fee * denominator;
 
@@ -379,14 +370,7 @@ impl PoolContract {
                 env::panic_str("Unsupported token");
             };
 
-            match res {
-                PromiseOrValue::Promise(p) => {
-                    res = PromiseOrValue::Promise(p.then(promise));
-                }
-                PromiseOrValue::Value(_) => {
-                    res = PromiseOrValue::Promise(promise);
-                }
-            }
+            res = PromiseOrValue::Promise(promise);
         }
 
         self.pool_index = U256::from(self.pool_index).unchecked_add(U256::from(128u8));
