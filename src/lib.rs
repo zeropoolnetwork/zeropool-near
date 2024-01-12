@@ -6,11 +6,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use ed25519_dalek::PublicKey;
 use ff_uint::{Num, NumRepr, PrimeField};
 use near_sdk::{
-    collections::TreeMap,
-    env,
-    json_types::{Base64VecU8, U128},
-    log, near_bindgen, require,
-    serde_json::json,
+    collections::TreeMap, env, json_types::U128, log, near_bindgen, require, serde_json::json,
     AccountId, Gas, PanicOnDefault, Promise, PromiseOrValue,
 };
 
@@ -28,10 +24,9 @@ mod withdraw;
 
 pub mod verifiers;
 
-use crate::verifiers::VerifierBackend;
-use crate::verifiers::default::{
-    Backend,
-    VK,
+use crate::verifiers::{
+    default::{Backend, VK},
+    VerifierBackend,
 };
 
 pub const FT_TRANSFER_GAS: Gas = Gas(10_000_000_000_000);
@@ -42,15 +37,25 @@ const R: U256 = U256::from_const_str(
     "21888242871839275222246405745257275088548364400416034343698204186575808495617",
 );
 
+fn tree_vk() -> VK {
+    const TREE_VK: &[u8] = include_bytes!("../params/tree_vk.bin");
+
+    VK::deserialize(&mut &Vec::<u8>::from(TREE_VK)[..])
+        .unwrap_or_else(|_| env::panic_str("Cannot deserialize vk."))
+}
+
+fn tx_vk() -> VK {
+    const TX_VK: &[u8] = include_bytes!("../params/tx_vk.bin");
+
+    VK::deserialize(&mut &Vec::<u8>::from(TX_VK)[..])
+        .unwrap_or_else(|_| env::panic_str("Cannot deserialize vk."))
+}
+
 #[near_bindgen]
 #[derive(PanicOnDefault, BorshDeserialize, BorshSerialize)]
 pub struct PoolContract {
     /// Operator is an entity that can make new transactions.
     operator: AccountId,
-    /// Transaction verifying key.
-    tx_vk: VK,
-    /// Merkle tree verifying key.
-    tree_vk: VK,
     /// The next transaction index.
     pool_index: U256,
     /// Merkle roots. "transaction index" => "merkle root"
@@ -78,58 +83,14 @@ impl PoolContract {
 
 #[near_bindgen]
 impl PoolContract {
-    #[init]
-    pub fn new_bin(
-        #[serializer(borsh)] tx_vk: VK,
-        #[serializer(borsh)] tree_vk: VK,
-        #[serializer(borsh)] token_id: AccountId,
-        #[serializer(borsh)] denominator: U256,
-    ) -> Self {
-        assert!(!env::state_exists(), "Already initialized");
-
-        if token_id.as_str() != "near" && cfg!(not(feature = "ft")) {
-            env::panic_str("Non NEAR tokens are not supported");
-        } else if cfg!(feature = "ft") && token_id.as_str() == "near" {
-            env::panic_str("Expected a token account ID, got 'near'. The contract is compiled with the 'ft' feature, so it expects a token account ID.");
-        }
-
-        let mut roots = TreeMap::new("roots".as_bytes());
-        roots.insert(&U256::ZERO, &FIRST_ROOT);
-
-        let default_operator = env::signer_account_id();
-
-        Self {
-            tx_vk,
-            tree_vk,
-            roots,
-            operator: default_operator,
-            pool_index: U256::ZERO,
-            nullifiers: TreeMap::new("nullifiers".as_bytes()),
-            all_messages_hash: U256::ZERO,
-            denominator,
-            lockups: Lockups::new(token_id.clone()),
-            withdraws: Withdraws::new(token_id),
-        }
-    }
-
     /// Accepts transaction and merkle tree verifying keys.
     #[init]
-    pub fn new(
-        tx_vk: Base64VecU8,
-        tree_vk: Base64VecU8,
-        token_id: AccountId,
-        denominator: String,
-    ) -> Self {
+    pub fn new(token_id: AccountId, denominator: String) -> Self {
         assert!(!env::state_exists(), "Already initialized");
 
         if token_id.as_str() != "near" && cfg!(not(feature = "ft")) {
             env::panic_str("Non NEAR tokens are not supported");
         }
-
-        let tx_vk = VK::deserialize(&mut &Vec::<u8>::from(tx_vk)[..])
-            .unwrap_or_else(|_| env::panic_str("Cannot deserialize vk."));
-        let tree_vk = VK::deserialize(&mut &Vec::<u8>::from(tree_vk)[..])
-            .unwrap_or_else(|_| env::panic_str("Cannot deserialize vk."));
 
         let denominator = U256::from_str(&denominator).unwrap_or_else(|_| {
             env::panic_str("Cannot parse denominator. It should be a decimal number.")
@@ -141,8 +102,6 @@ impl PoolContract {
         let default_operator = env::signer_account_id();
 
         Self {
-            tx_vk,
-            tree_vk,
             roots,
             operator: default_operator,
             pool_index: U256::ZERO,
@@ -251,7 +210,7 @@ impl PoolContract {
             message_hash_num,
         ];
 
-        if !<Backend as VerifierBackend>::verify(self.tx_vk.clone(), tx.transact_proof, &transact_inputs) {
+        if !<Backend as VerifierBackend>::verify(tx_vk(), tx.transact_proof, &transact_inputs) {
             log!("Transaction proof inputs:\nroot_before: {},\nnullifier: {},\nout_commit: {},\ndelta: {},\nmessage_hash_num: {}", root_before, tx.nullifier, tx.out_commit, transact_inputs[3], message_hash_num);
             env::panic_str("Transaction proof is invalid.");
         }
@@ -270,7 +229,7 @@ impl PoolContract {
             .get(&self.pool_index)
             .unwrap_or_else(|| env::panic_str("Root not found"));
         let tree_inputs = [pool_root, tx.root_after, tx.out_commit];
-        if !<Backend as VerifierBackend>::verify(self.tree_vk.clone(), tx.tree_proof, &tree_inputs) {
+        if !<Backend as VerifierBackend>::verify(tree_vk(), tx.tree_proof, &tree_inputs) {
             log!(
                 "Tree proof inputs:\npool_root: {},\nroot_after: {},\nout_commit: {}",
                 pool_root,
@@ -454,10 +413,10 @@ mod tests {
     };
 
     use super::*;
-    use crate::verifiers::default::{Proof};
     use crate::{
         lockup::WITHDRAW_TIMEOUT_MS,
         tx_decoder::{DepositData, DepositDataForSigning, Memo, OptDepositData},
+        verifiers::default::Proof,
     };
 
     const DENOMINATOR: u128 = 1_000_000_000_000_000;
