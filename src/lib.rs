@@ -51,14 +51,20 @@ const R: U256 = U256::from_const_str(
 );
 
 fn tree_vk() -> VK {
+    #[cfg(feature = "plonk")]
+    const TREE_VK: &[u8] = include_bytes!("../params/tree_vd.bin");
+    #[cfg(feature = "groth16")]
     const TREE_VK: &[u8] = include_bytes!("../params/tree_vk.bin");
 
-    VK::deserialize(&mut &Vec::<u8>::from(TREE_VK)[..])
-        .unwrap_or_else(|_| env::panic_str("Cannot deserialize vk."))
+    VK::deserialize(&mut &Vec::<u8>::from(TREE_VK)[..]).unwrap()
+    // .unwrap_or_else(|_| env::panic_str("Cannot deserialize vk."))
 }
 
 fn tx_vk() -> VK {
-    const TX_VK: &[u8] = include_bytes!("../params/tx_vk.bin");
+    #[cfg(feature = "plonk")]
+    const TX_VK: &[u8] = include_bytes!("../params/transfer_vd.bin");
+    #[cfg(feature = "groth16")]
+    const TX_VK: &[u8] = include_bytes!("../params/transfer_vk.bin");
 
     VK::deserialize(&mut &Vec::<u8>::from(TX_VK)[..])
         .unwrap_or_else(|_| env::panic_str("Cannot deserialize vk."))
@@ -211,7 +217,6 @@ impl PoolContract {
             .get(&transfer_index)
             .unwrap_or_else(|| env::panic_str("Root not found"));
 
-        // Verify transaction proof
         const POOL_ID: U256 = U256::ZERO;
         const DELTA_SIZE: u32 = 256;
 
@@ -223,6 +228,7 @@ impl PoolContract {
             message_hash_num,
         ];
 
+        log!("Verifying transaction proof");
         if !<Backend as VerifierBackend>::verify(tx_vk(), tx.transact_proof, &transact_inputs) {
             log!("Transaction proof inputs:\nroot_before: {},\nnullifier: {},\nout_commit: {},\ndelta: {},\nmessage_hash_num: {}", root_before, tx.nullifier, tx.out_commit, transact_inputs[3], message_hash_num);
             env::panic_str("Transaction proof is invalid.");
@@ -236,12 +242,13 @@ impl PoolContract {
             env::panic_str("Transfer index is greater than pool index.");
         }
 
-        // Verify tree proof
         let pool_root = self
             .roots
             .get(&self.pool_index)
             .unwrap_or_else(|| env::panic_str("Root not found"));
         let tree_inputs = [pool_root, tx.root_after, tx.out_commit];
+
+        log!("Verifying tree proof");
         if !<Backend as VerifierBackend>::verify(tree_vk(), tx.tree_proof, &tree_inputs) {
             log!(
                 "Tree proof inputs:\npool_root: {},\nroot_after: {},\nout_commit: {}",
