@@ -184,6 +184,10 @@ impl PoolContract {
         self.withdraws.execute(account_id)
     }
 
+    pub fn withdrawal_exists(&self, account_id: AccountId) -> bool {
+        self.withdraws.exists(&account_id)
+    }
+
     /// Get all locks for the specified account in JSON format.
     /// ```json
     /// [{ nonce: 123, amount: "123", timestamp: "123" }, ...]
