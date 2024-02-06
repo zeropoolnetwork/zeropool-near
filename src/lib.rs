@@ -50,16 +50,18 @@ const R: U256 = U256::from_const_str(
     "21888242871839275222246405745257275088548364400416034343698204186575808495617",
 );
 
+#[cfg(not(test))]
 fn tree_vk() -> VK {
     #[cfg(feature = "plonk")]
     const TREE_VK: &[u8] = include_bytes!("../params/tree_vd.bin");
     #[cfg(feature = "groth16")]
     const TREE_VK: &[u8] = include_bytes!("../params/tree_vk.bin");
 
-    VK::deserialize(&mut &Vec::<u8>::from(TREE_VK)[..]).unwrap()
-    // .unwrap_or_else(|_| env::panic_str("Cannot deserialize vk."))
+    VK::deserialize(&mut &Vec::<u8>::from(TREE_VK)[..])
+        .unwrap_or_else(|_| env::panic_str("Cannot deserialize tree update VK"))
 }
 
+#[cfg(not(test))]
 fn tx_vk() -> VK {
     #[cfg(feature = "plonk")]
     const TX_VK: &[u8] = include_bytes!("../params/transfer_vd.bin");
@@ -67,7 +69,17 @@ fn tx_vk() -> VK {
     const TX_VK: &[u8] = include_bytes!("../params/transfer_vk.bin");
 
     VK::deserialize(&mut &Vec::<u8>::from(TX_VK)[..])
-        .unwrap_or_else(|_| env::panic_str("Cannot deserialize vk."))
+        .unwrap_or_else(|_| env::panic_str("Cannot deserialize transfer VK"))
+}
+
+#[cfg(test)]
+fn tree_vk() -> VK {
+    unimplemented!("tree_vk");
+}
+
+#[cfg(test)]
+fn tx_vk() -> VK {
+    unimplemented!("tx_vk");
 }
 
 #[near_bindgen]
