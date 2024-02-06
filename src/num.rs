@@ -51,7 +51,7 @@ impl U256 {
     }
 }
 
-const fn uint_from_u64(v: u64) -> U256 {
+pub const fn uint_from_u64(v: u64) -> U256 {
     let mut ret = [0; 4];
     ret[0] = v;
     U256(ret)
