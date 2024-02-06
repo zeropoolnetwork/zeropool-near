@@ -5,7 +5,7 @@ use ed25519_dalek::{Signature, SIGNATURE_LENGTH};
 use ff_uint::{Num, NumRepr, PrimeField};
 use near_sdk::{env, AccountId};
 
-use crate::{num::*, verifier::Proof};
+use crate::{num::*, verifiers::default::Proof};
 
 const BALANCE_SIZE: usize = 8;
 

@@ -17,6 +17,10 @@ num-traits = "0.2.15"
 ff-uint = { version = "0.2.4", default-features = false }
 serde = "1.0.145"
 serde_json = { version = "1.0.73", optional = true }
+near-halo2-verifier = { git = "https://github.com/zeropoolnetwork/near-halo2-verifier", branch = "master", optional = true }
+
+[patch."https://github.com/privacy-scaling-explorations/halo2curves"]
+halo2curves = { git = "https://github.com/zeropoolnetwork/halo2curves", branch = "zeropool-near" }
 
 [profile.release]
 codegen-units = 1
@@ -36,8 +40,9 @@ near-crypto = "0.14.0"
 
 [features]
 default = ["borsh_support", "rand_support"]
+groth16 = []
+plonk = ["near-halo2-verifier"]
 ft = ["serde_json"]
 borsh_support = ["ff-uint/borsh_support"]
 rand_support = ["ff-uint/rand_support"]
 heavy_tests = []
-

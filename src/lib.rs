@@ -1,3 +1,5 @@
+#![feature(iterator_try_collect)]
+
 use std::str::FromStr;
 
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -16,15 +18,21 @@ use crate::{
     lockup::{FullLock, Lockups},
     num::*,
     tx_decoder::{parse_delta, Tx, TxType},
-    verifier::{alt_bn128_groth16verify, VK},
     withdraw::Withdraws,
 };
 
 mod lockup;
 mod num;
 mod tx_decoder;
-mod verifier;
 mod withdraw;
+
+pub mod verifiers;
+
+use crate::verifiers::VerifierBackend;
+use crate::verifiers::default::{
+    Backend,
+    VK,
+};
 
 pub const FT_TRANSFER_GAS: Gas = Gas(10_000_000_000_000);
 const FIRST_ROOT: U256 = U256::from_const_str(
@@ -243,7 +251,7 @@ impl PoolContract {
             message_hash_num,
         ];
 
-        if !alt_bn128_groth16verify(self.tx_vk.clone(), tx.transact_proof, &transact_inputs) {
+        if !<Backend as VerifierBackend>::verify(self.tx_vk.clone(), tx.transact_proof, &transact_inputs) {
             log!("Transaction proof inputs:\nroot_before: {},\nnullifier: {},\nout_commit: {},\ndelta: {},\nmessage_hash_num: {}", root_before, tx.nullifier, tx.out_commit, transact_inputs[3], message_hash_num);
             env::panic_str("Transaction proof is invalid.");
         }
@@ -262,7 +270,7 @@ impl PoolContract {
             .get(&self.pool_index)
             .unwrap_or_else(|| env::panic_str("Root not found"));
         let tree_inputs = [pool_root, tx.root_after, tx.out_commit];
-        if !alt_bn128_groth16verify(self.tree_vk.clone(), tx.tree_proof, &tree_inputs) {
+        if !<Backend as VerifierBackend>::verify(self.tree_vk.clone(), tx.tree_proof, &tree_inputs) {
             log!(
                 "Tree proof inputs:\npool_root: {},\nroot_after: {},\nout_commit: {}",
                 pool_root,
@@ -446,6 +454,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::verifiers::default::{Proof};
     use crate::{
         lockup::WITHDRAW_TIMEOUT_MS,
         tx_decoder::{DepositData, DepositDataForSigning, Memo, OptDepositData},
@@ -487,7 +496,7 @@ mod tests {
     fn tx_proof(
         public: TransferPub<<Bn256 as Engine>::Fr>,
         secret: TransferSec<<Bn256 as Engine>::Fr>,
-    ) -> verifier::Proof {
+    ) -> Proof {
         let params_bin = std::fs::read("params/transfer_params.bin").unwrap();
         let params = Parameters::<Bn256>::read(&mut params_bin.as_slice(), true, true).unwrap();
 
@@ -498,13 +507,13 @@ mod tests {
         let (_inputs, snark_proof) = prove(&params, &public, &secret, circuit);
 
         let proof_bytes = snark_proof.try_to_vec().unwrap();
-        verifier::Proof::try_from_slice(&proof_bytes).unwrap()
+        Proof::try_from_slice(&proof_bytes).unwrap()
     }
 
     fn tree_proof(
         public: TreePub<<Bn256 as Engine>::Fr>,
         secret: TreeSec<<Bn256 as Engine>::Fr>,
-    ) -> verifier::Proof {
+    ) -> Proof {
         let params_bin = std::fs::read("params/tree_params.bin").unwrap();
         let params = Parameters::<Bn256>::read(&mut params_bin.as_slice(), true, true).unwrap();
 
@@ -515,7 +524,7 @@ mod tests {
         let (_inputs, snark_proof) = prove(&params, &public, &secret, circuit);
 
         let proof_bytes = snark_proof.try_to_vec().unwrap();
-        verifier::Proof::try_from_slice(&proof_bytes).unwrap()
+        Proof::try_from_slice(&proof_bytes).unwrap()
     }
 
     fn create_tx(
